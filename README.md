@@ -48,6 +48,7 @@
 | 📡 Status data | Mirror of the host session runtime snapshots (subscription-driven) |
 | 💾 State | localStorage only (`dsh.worktable.*`); no workspace files touched |
 | 🎨 UI | TypeScript + React (host externals) + vanilla CSS, dark-first with light theme |
+| 🌐 Browser pane | Slark native browser with tabs and background media controls; iframe fallback elsewhere |
 
 ---
 

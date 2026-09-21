@@ -48,6 +48,7 @@
 | 📡 状态数据 | 宿主会话运行时快照的镜像（订阅驱动） |
 | 💾 状态存储 | 仅 localStorage（dsh.worktable.*），不碰工作区文件 |
 | 🎨 界面 | TypeScript + React（宿主 external）+ 原生 CSS，暗色优先 + 浅色主题 |
+| 🌐 浏览器窗 | Slark 原生多标签浏览器与后台媒体控制；其他宿主自动降级为 iframe |
 
 ---
 

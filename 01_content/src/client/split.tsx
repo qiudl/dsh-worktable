@@ -3,6 +3,7 @@ import { parentPathOf } from './pathutil'
 import { CHANGELOG_V030 } from './changelog'
 import { LOCAL_VERSION, checkUpdate, getAutoCheck, readCache, setAutoCheck as storeAutoCheck, setSkipVersion, type UpdateInfo, type UpdateStatus } from './updateCheck'
 import { Terminal } from 'xterm'
+import { BrowserMediaDock, BrowserPane } from './browser'
 
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js/lib/core'
@@ -170,6 +171,17 @@ function tabTitleOf(content: SplitContent): string {
 function basenameOf(p: string): string {
   const parts = String(p).replace(/[\\/]+$/, '').split(/[\\/]/)
   return parts[parts.length - 1] || String(p)
+}
+
+function browserPaneId(workspaceId: string, paneId: string, tabId: string): string {
+  const raw = `${workspaceId}_${paneId}_${tabId}`
+  let hash = 2166136261
+  for (let index = 0; index < raw.length; index += 1) {
+    hash ^= raw.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  const prefix = raw.replace(/[^A-Za-z0-9_-]/gu, '_').slice(0, 64)
+  return `wt_${prefix}_${(hash >>> 0).toString(36)}`.slice(0, 80)
 }
 
 /** 内容同一性（openTab 去重：同窗内同内容只保留一个标签，再次打开切过去） */
@@ -1407,37 +1419,6 @@ function makeDividerHandler(kind: 'left' | 'chat' | 'top' | 'pane' | 'topPane', 
     target.addEventListener('pointerup', onUp)
     target.addEventListener('pointercancel', onUp)
   }
-}
-
-/** 浏览器内置窗：地址栏 + 前往；刷新统一在标签栏最左（重挂载 iframe，跨域也可靠） */
-function BrowserPane(props: { row: PaneRow; index: number; tabId: string; content: SplitContent; reloadKey: number }) {
-  const initial = props.content?.url || 'https://example.com'
-  const [url, setUrl] = useState(initial)
-  const [src, setSrc] = useState(initial)
-  const go = () => {
-    const u = url.trim()
-    const ok = /^(\/|https?:\/\/)/i.test(u) ? u : 'about:blank'
-    setSrc(ok)
-    if (ok !== 'about:blank') {
-      // 地址回写：刷新/重开布局时保持当前网址
-      splitStore.setTabContent(props.row, props.index, props.tabId, { kind: 'builtin', type: 'browser', url: ok })
-    }
-  }
-  return (
-    <>
-      <div className="dsh-wt_browserBar">
-        <input
-          className="dsh-wt_browserInput"
-          value={url}
-          placeholder="https://"
-          onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') go() }}
-        />
-        <button type="button" className="dsh-wt_browserGo" onClick={go}>↗</button>
-      </div>
-      <iframe key={props.reloadKey} className="dsh-wt_paneFrame" src={src} title="browser" />
-    </>
-  )
 }
 
 /** iframe 内容标签（网页/站点产物）：刷新统一在标签栏最左（重挂载整页刷新，跨域可靠） */
@@ -2816,7 +2797,7 @@ function CustomPane(props: { paneTitle?: string }) {
 }
 
 /** 单个标签页的内容渲染 */
-function PaneTabBody(props: { tab: PaneTab; row: PaneRow; index: number; paneTitle?: string; reloadKey: number }) {
+function PaneTabBody(props: { tab: PaneTab; row: PaneRow; index: number; workspaceId: string; paneId: string; paneTitle?: string; reloadKey: number }) {
   const content = props.tab.content
   if (content.kind === 'iframe') {
     return <IframePane url={content.url} title={content.title ?? props.tab.title} reloadKey={props.reloadKey} />
@@ -2824,7 +2805,12 @@ function PaneTabBody(props: { tab: PaneTab; row: PaneRow; index: number; paneTit
   if (content.kind === 'file') {
     return <FileViewer path={content.path} />
   }
-  if (content.type === 'browser') return <BrowserPane row={props.row} index={props.index} tabId={props.tab.id} content={content} reloadKey={props.reloadKey} />
+  if (content.type === 'browser') return <BrowserPane
+    paneId={browserPaneId(props.workspaceId, props.paneId, props.tab.id)}
+    initialUrl={content.url || 'https://example.com'}
+    reloadKey={props.reloadKey}
+    onNavigate={(url) => splitStore.setTabContent(props.row, props.index, props.tab.id, { kind: 'builtin', type: 'browser', url })}
+  />
   if (content.type === 'anim') return <AnimPane row={props.row} index={props.index} tabId={props.tab.id} content={content} reloadKey={props.reloadKey} />
   if (content.type === 'console') return <ConsolePane />
   if (content.type === 'explorer') return <ExplorerPane row={props.row} index={props.index} />
@@ -2848,7 +2834,7 @@ function refreshableTab(t: PaneTab): boolean {
 
 /** 窗内容：标签页模型（无标签 = 6 选 1 选择器；标签可切换/关闭，关完回到选择器）
  *  网页类标签最左侧固定一个 ↻ 刷新按钮（标签名之前），点击重挂载该标签内容。 */
-function PaneBody(props: { pane: SplitPane; row: PaneRow; index: number }) {
+function PaneBody(props: { pane: SplitPane; row: PaneRow; index: number; workspaceId: string }) {
   const { pane, row, index } = props
   const tabs = pane.tabs ?? []
   const active = Math.min(pane.active ?? 0, Math.max(0, tabs.length - 1))
@@ -2902,7 +2888,7 @@ function PaneBody(props: { pane: SplitPane; row: PaneRow; index: number }) {
         })}
       </div>
       )}
-      <PaneTabBody tab={tabs[active]} row={row} index={index} paneTitle={pane.title} reloadKey={reloadKeys[tabs[active].id] ?? 0} />
+      <PaneTabBody tab={tabs[active]} row={row} index={index} workspaceId={props.workspaceId} paneId={pane.id} paneTitle={pane.title} reloadKey={reloadKeys[tabs[active].id] ?? 0} />
     </>
   )
 }
@@ -3028,7 +3014,7 @@ function WorkspaceLayer(props: { spec: LayoutSpec; geom: Geom | null; chatW: num
         <span className="dsh-wt_paneTitle">{it.pane.title}</span>
       </div>
       )}
-      <PaneBody pane={it.pane} row={row} index={index} />
+      <PaneBody pane={it.pane} row={row} index={index} workspaceId={spec.id} />
       {!singleConsole && (
         <>
         <button
@@ -3217,6 +3203,7 @@ function SplitWorkspace() {
           </div>
         )
       })}
+      <BrowserMediaDock />
     </>
   )
 }
