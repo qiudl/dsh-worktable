@@ -60,13 +60,13 @@
    **A · one-liner (recommended)** — straight from the GitHub Release tarball, no Git needed:
 
    ```bash
-   dsh plugin --profile web add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
+   dsh plugin --profile web add "https://github.com/qiudl/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
    ```
 
    **B · local clone (for hacking on the source)** — `link:` accepts a local absolute path only (no spaces in the path):
 
    ```bash
-   git clone https://github.com/Aisland-SJL/dsh-worktable.git
+   git clone https://github.com/qiudl/dsh-worktable.git
    dsh plugin --profile web add "link:<absolute path of the cloned dsh-worktable directory>/01_content"
    # e.g. cloned into D:\tools → dsh plugin --profile web add "link:D:/tools/dsh-worktable/01_content"
    ```
@@ -81,7 +81,7 @@
 Save your tasks, fully exit the app from its menu/tray (closing the window is not enough), replace the installation-directory placeholder, run in PowerShell, then reopen the app manually:
 
 ```powershell
-& "<Desktop installation directory>\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add "https://github.com/Aisland-SJL/dsh-worktable/releases/download/v0.4.0/dsh-worktable-0.4.0.tgz"
+& "<Desktop installation directory>\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add "https://github.com/qiudl/dsh-worktable/releases/download/v0.4.0/dsh-worktable-0.4.0.tgz"
 ```
 
 Use the Desktop-bundled CLI and `desktop` profile, not an unpinned npx or Web CLI. Preserve the actual DSH_HOME. Browser-local projects/layouts/media do not automatically sync between Web and Desktop origins, even when sessions share one data home.
@@ -130,7 +130,7 @@ Projects, bindings and layouts live in browser localStorage; media lives in Inde
 - For Web, re-run the install command (installs the latest published release), then restart dsh web and refresh. Desktop users must follow the Desktop instructions above:
 
   ```bash
-  dsh plugin --profile web add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
+  dsh plugin --profile web add "https://github.com/qiudl/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
   ```
 
 **Case B: Harness itself is down** (service fails to start / "Failed to load plugins")

@@ -8107,6 +8107,14 @@ var css = xterm_default + "\n" + [
   ".dsh-wt_browserInput{flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11px;line-height:16px}",
   ".dsh-wt_browserGo{flex:none;width:20px;height:20px;padding:0;border:none;border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary,#9aa4b2);font-size:12px;cursor:pointer}",
   ".dsh-wt_browserGo:hover{color:var(--dsw-alias-label-primary,#e6e8eb);background:var(--dsw-alias-fill-l1,rgba(255,255,255,.06))}",
+  ".dsh-wt_browserGo:disabled{opacity:.35;cursor:default}",
+  // iframe 承载层：缩放模式下 iframe 会比容器大（或小），由容器负责滚动/裁剪；
+  // 100% 档 iframe 仍是 100%×100% 绝对定位填满容器 → 与改动前视觉一致。
+  ".dsh-wt_frameWrap{flex:1;min-height:0;position:relative;overflow:auto;background:#010409}",
+  ".dsh-wt_frameWrap > .dsh-wt_paneFrame{position:absolute;top:0;left:0;right:auto;bottom:auto}",
+  ".dsh-wt_browserZoom{flex:none;height:20px;padding:0 2px;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:4px;background:var(--dsw-alias-fill-l1,rgba(255,255,255,.03));color:var(--dsw-alias-label-secondary,#9aa4b2);font:inherit;font-size:10px;line-height:16px;cursor:pointer}",
+  ".dsh-wt_browserTip{flex:none;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary,#6e7683)}",
+  ".dsh-wt_browserTipFail{color:var(--dsw-alias-state-error-primary,#f47067)}",
   ".dsh-wt_paneWip{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--dsw-alias-label-tertiary,#6e7683)}",
   ".dsh-wt_paneWipIcon{font-size:26px;line-height:30px}",
   ".dsh-wt_paneWipText{font-size:11px}",
@@ -8159,6 +8167,21 @@ var css = xterm_default + "\n" + [
   ".dsh-wt_tabTitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
   ".dsh-wt_tabClose{flex:none;width:14px;height:14px;padding:0;border:none;border-radius:3px;background:transparent;color:var(--dsw-alias-label-tertiary,#6e7683);font-size:9px;line-height:1;cursor:pointer}",
   ".dsh-wt_tabClose:hover{color:var(--dsw-alias-label-primary,#e6e8eb);background:var(--dsw-alias-fill-l1,rgba(255,255,255,.08))}",
+  // 标签保活包裹层：激活时 display:contents（不生成盒子，内容仍直接参与窗格 flex 布局，
+  // 与旧「只渲染激活标签」的盒模型一致）；非激活时 [hidden] 覆盖为 display:none。
+  // 两条都要写：[hidden] 是 UA 规则，作者侧的 display:contents 会盖过它。
+  ".dsh-wt_tabWrap{display:contents}",
+  ".dsh-wt_tabWrap[hidden]{display:none}",
+  // 标签栏「＋」追加标签 + 选择器下拉（fixed 避开 tabBar 的 overflow 裁剪；
+  // z-index 取 69：低于分栏标题栏 70、高于窗格 68）
+  ".dsh-wt_tabAdd{flex:none;width:18px;height:16px;padding:0;margin-bottom:2px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--dsw-alias-label-secondary,#9aa4b2);font-size:11px;line-height:1;cursor:pointer}",
+  ".dsh-wt_tabAdd:hover{color:var(--dsw-alias-label-primary,#e6e8eb);background:var(--dsw-alias-fill-l1,rgba(255,255,255,.08));border-color:var(--dsw-alias-border-l1,#262b36)}",
+  ".dsh-wt_tabAddPop{position:fixed;z-index:69;display:flex;flex-direction:column;box-sizing:border-box;width:200px;padding:4px;border:1px solid var(--dsw-alias-border-l2,#3a4150);border-radius:10px;background:var(--dsw-alias-bg-base,#0b0e14);box-shadow:var(--dsw-shadow-lv2,0 8px 24px rgba(0,0,0,.4))}",
+  ".dsh-wt_tabAddPopBody{display:flex;flex-direction:column;height:220px;min-height:0}",
+  // 下拉里复用窗格选择器：按钮收小，2 列 3 行放得下 5 个内置入口
+  ".dsh-wt_tabAddPop .dsh-wt_panePicker{padding:8px}",
+  ".dsh-wt_tabAddPop .dsh-wt_panePick{width:74px;height:58px;gap:3px;padding:4px;font-size:10px;line-height:13px}",
+  ".dsh-wt_tabAddPop .dsh-wt_panePick span{font-size:16px;line-height:18px}",
   // 树形资源管理器
   ".dsh-wt_treeRow{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;padding:3px 6px;border:none;border-radius:5px;background:transparent;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11px;line-height:16px;cursor:pointer;text-align:left}",
   ".dsh-wt_treeRow:hover{background:var(--dsw-alias-fill-l1,rgba(255,255,255,.05))}",
@@ -8592,6 +8615,16 @@ var zh = {
   "pane.jobsEmpty": "\u5F53\u524D\u4F1A\u8BDD\u6682\u65E0\u540E\u53F0\u4EFB\u52A1",
   "pane.termFail": "\u7EC8\u7AEF\u4E0D\u53EF\u7528\uFF08\u5BBF\u4E3B\u7F3A\u5C11 node-pty/ws \u6216\u8FDE\u63A5\u5931\u8D25\uFF09",
   "pane.closeTab": "\u5173\u95ED\u6807\u7B7E\u9875",
+  "pane.addTab": "\u8FFD\u52A0\u6807\u7B7E\u9875",
+  "pane.openExternal": "\u5728\u7CFB\u7EDF\u6D4F\u89C8\u5668\u6253\u5F00",
+  "pane.copyLink": "\u590D\u5236\u94FE\u63A5",
+  "pane.copied": "\u5DF2\u590D\u5236\u94FE\u63A5",
+  "pane.copyFail": "\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u9009\u4E2D\u5730\u5740",
+  "pane.openFallback": "\u5DF2\u590D\u5236\u94FE\u63A5\uFF1A\u82E5\u7CFB\u7EDF\u6D4F\u89C8\u5668\u6CA1\u6253\u5F00\uFF0C\u8BF7\u7C98\u8D34\u5730\u5740",
+  "pane.zoom": "\u7F29\u653E\uFF08100% \u586B\u6EE1\u7A97\u683C / \u9002\u5E94\u5BBD\u5EA6\u7B49\u6BD4\u7F29\u5C0F / 125% \u653E\u5927\uFF09",
+  "pane.zoom100": "100%",
+  "pane.zoomFit": "\u9002\u5E94\u5BBD\u5EA6",
+  "pane.zoom125": "125%",
   "pane.collapse": "\u6298\u53E0\u7A97\u683C",
   "annot.label": "\u6807\u6CE8\uFF1A\u70B9\u51FB\u6216\u62D6\u52A8\u7A97\u53E3\u4E2D\u7684\u4F4D\u7F6E\u63D0\u8981\u6C42",
   "annot.hint": "\u70B9\u51FB\u6216\u62D6\u52A8\u6846\u9009\u7A97\u53E3\u4E2D\u7684\u4EFB\u610F\u4F4D\u7F6E\uFF0C\u518D\u8F93\u5165\u4F60\u7684\u8981\u6C42\uFF1B\u8FDE\u7EED\u6807\u6CE8\u4F1A\u4F9D\u6B21\u8FFD\u52A0\u5230\u8F93\u5165\u6846",
@@ -8825,6 +8858,16 @@ var en = {
   "pane.jobsEmpty": "No background jobs in the current session",
   "pane.termFail": "Terminal unavailable (host missing node-pty/ws, or connection failed)",
   "pane.closeTab": "Close tab",
+  "pane.addTab": "Add tab",
+  "pane.openExternal": "Open in system browser",
+  "pane.copyLink": "Copy link",
+  "pane.copied": "Link copied",
+  "pane.copyFail": "Copy failed \u2014 select the address manually",
+  "pane.openFallback": "Link copied: paste it if the browser did not open",
+  "pane.zoom": "Zoom (100% fills the pane / Fit width scales down / 125% magnifies)",
+  "pane.zoom100": "100%",
+  "pane.zoomFit": "Fit width",
+  "pane.zoom125": "125%",
   "pane.collapse": "Collapse pane",
   "annot.label": "Annotate: click or drag a spot in the window",
   "annot.hint": "Click or drag to select a spot in any window, then type your request; consecutive annotations append to the input.",
@@ -8919,7 +8962,7 @@ function hostWebSocketUrl(path, surface = {
 }
 function worktableUpgrade(protocol = typeof location === "undefined" ? "http:" : location.protocol) {
   const desktop = protocol === "dsh-app:";
-  const command = "dsh plugin --profile " + (desktop ? "desktop" : "web") + ' add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"';
+  const command = "dsh plugin --profile " + (desktop ? "desktop" : "web") + ' add "https://github.com/qiudl/dsh-worktable/releases/latest/download/dsh-worktable.tgz"';
   const prompt = desktop ? "\u5E2E\u6211\u5347\u7EA7 dsh-worktable\u3002\u6211\u5F53\u524D\u4F7F\u7528\u5B98\u65B9\u684C\u9762\u7AEF\uFF1A\u5148\u5B9A\u4F4D\u8BE5\u684C\u9762\u7AEF\u81EA\u5E26\u7684 dsh CLI \u5E76\u51C6\u5907\u66F4\u65B0\uFF0C\u518D\u63D0\u9192\u6211\u5B8C\u6574\u9000\u51FA\u684C\u9762\u7AEF\u3002\u786E\u8BA4\u9000\u51FA\u540E\u4F7F\u7528\u8BE5 CLI \u6267\u884C " + command + "\u3002\u4E0D\u8981\u4F7F\u7528\u7F51\u9875\u7AEF CLI\uFF0C\u4E0D\u8981\u4FEE\u6539 web profile\uFF0C\u4E0D\u8981\u81EA\u52A8\u6740\u8FDB\u7A0B\u6216\u91CD\u542F\uFF1B\u5B8C\u6210\u540E\u63D0\u9192\u6211\u624B\u52A8\u91CD\u65B0\u6253\u5F00\u684C\u9762\u7AEF\u3002" : "\u5E2E\u6211\u5347\u7EA7 dsh-worktable\uFF1A\u6267\u884C " + command + "\uFF0C\u5B8C\u6210\u540E\u63D0\u9192\u6211\u91CD\u542F dsh web \u5E76\u5237\u65B0\u9875\u9762";
   return { command, prompt, desktop };
 }
@@ -9027,8 +9070,8 @@ var CHANGELOG_V030 = `\u66F4\u65B0\u516C\u544A \xB7 v0.4.0
 \u30103.1 \u6587\u5B57\u4E0E\u7EC6\u8282\u6253\u78E8\u3011\u5168\u5C40\u5B57\u4F53\u4E0E\u5B57\u53F7\u7EDF\u4E00\u4F18\u5316\u3001\u4E0B\u62C9\u9762\u677F\u73BB\u7483\u5316\u4E0E\u5BF9\u9F50\u3001\u83DC\u5355\u70B9\u9009\u540E\u4FDD\u6301\u6253\u5F00\u4FBF\u4E8E\u8FDE\u7EED\u9884\u89C8\u3001\u6309\u94AE\u63CF\u8FB9\u4E0E\u60AC\u505C\u53CD\u9988\u7B49\u4EA4\u4E92\u7EC6\u8282\uFF1B\u540C\u65F6\u4FEE\u590D\u4E86\u591A\u9879\u4F53\u9A8C\u95EE\u9898\uFF08\u7167\u7247\u4E0A\u4F20\u6E05\u6670\u5EA6\u3001\u80CC\u666F\u7F51\u683C\u7EBF\u5728\u7167\u7247\u6A21\u5F0F\u4E0B\u4E0D\u751F\u6548\u3001\u6D45\u8272\u4E3B\u9898\u4E0B\u5DE5\u4F5C\u72B6\u6001\u5149\u6548\u4E0D\u53EF\u89C1\u7B49\uFF09\u3002`;
 
 // src/client/updateCheck.ts
-var LOCAL_VERSION = false ? "dev" : "0.4.0";
-var UPDATE_REPO = "Aisland-SJL/dsh-worktable";
+var LOCAL_VERSION = false ? "dev" : "0.4.1";
+var UPDATE_REPO = "qiudl/dsh-worktable";
 var K_UPDATE_CHECK = "dsh.worktable.updateCheck.v1";
 var K_LAST_CHECK = "dsh.worktable.lastUpdateCheck.v1";
 var K_SKIP = "dsh.worktable.skipVersion.v1";
@@ -16947,7 +16990,15 @@ function basenameOf2(p) {
 function sameContent(a, b) {
   if (a.kind === "iframe" && b.kind === "iframe") return a.url === b.url;
   if (a.kind === "file" && b.kind === "file") return a.path === b.path;
-  if (a.kind === "builtin" && b.kind === "builtin") return a.type === b.type;
+  if (a.kind === "builtin" && b.kind === "builtin") {
+    if (a.type !== b.type) return false;
+    if (a.type === "browser" || a.type === "anim") {
+      const ua = (a.url ?? "").trim();
+      const ub = (b.url ?? "").trim();
+      return ua !== "" && ua === ub;
+    }
+    return true;
+  }
   return false;
 }
 var uiT = null;
@@ -17768,10 +17819,35 @@ var splitStore = {
       const tabs = [...pane.tabs ?? []];
       const existing = tabs.findIndex((t) => sameContent(t.content, content));
       if (existing >= 0) return { ...pane, content: null, tabs, active: existing };
-      const tab = { id: "t" + Date.now().toString(36), title: tabTitleOf(content), content };
+      const tab = { id: "t" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2), title: tabTitleOf(content), content };
       tabs.push(tab);
       return { ...pane, content: null, tabs, active: tabs.length - 1 };
     };
+    if (row === "left") {
+      if (!spec.left || i !== 0) return;
+      this.spec = { ...spec, left: mutate(spec.left) };
+    } else if (row === "top") {
+      const top = [...spec.top ?? []];
+      if (!top[i]) return;
+      top[i] = mutate(top[i]);
+      this.spec = { ...spec, top };
+    } else {
+      const main = [...spec.main];
+      if (!main[i]) return;
+      main[i] = mutate(main[i]);
+      this.spec = { ...spec, main };
+    }
+    this.onSpecMutated?.(this.spec);
+    this.persist();
+    this.notify();
+  },
+  setTabZoom(row, i, tabId, zoom) {
+    const spec = this.spec;
+    if (!spec) return;
+    const mutate = (pane) => ({
+      ...pane,
+      tabs: (pane.tabs ?? []).map((t) => t.id === tabId ? { ...t, content: { ...t.content, zoom } } : t)
+    });
     if (row === "left") {
       if (!spec.left || i !== 0) return;
       this.spec = { ...spec, left: mutate(spec.left) };
@@ -18039,16 +18115,136 @@ function makeDividerHandler(kind, index) {
     target.addEventListener("pointercancel", onUp);
   };
 }
+var FRAME_LOGICAL_W = 1280;
+function frameGeometry(mode, wrapW, wrapH) {
+  if (mode === "100" || !(wrapW > 0) || !(wrapH > 0)) return { width: "100%", height: "100%", scale: 1 };
+  const logical = mode === "fit" ? Math.max(FRAME_LOGICAL_W, wrapW) : Math.max(FRAME_LOGICAL_W, wrapW / 1.25);
+  const scale = mode === "fit" ? Math.min(1, wrapW / logical) : 1.25;
+  return { width: logical, height: Math.max(1, Math.round(wrapH / scale)), scale };
+}
+function zoomOf(content) {
+  const z = content.kind === "builtin" ? content.zoom : void 0;
+  return z === "fit" || z === "125" ? z : "100";
+}
+function keepZoom(prev, next) {
+  const z = zoomOf(prev);
+  return z === "100" ? next : { ...next, zoom: z };
+}
+function normalizeAddress(input) {
+  const u = String(input ?? "").trim();
+  if (!u) return "about:blank";
+  if (/^(\/|https?:\/\/)/i.test(u)) return u;
+  if (/\s/.test(u)) return "about:blank";
+  if (/^localhost(:\d{1,5})?([/?#].*)?$/i.test(u)) return "https://" + u;
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d{1,5})?([/?#].*)?$/i.test(u)) return "https://" + u;
+  return "about:blank";
+}
+function FrameHost(props) {
+  const wrapRef = (0, import_react.useRef)(null);
+  const [box, setBox] = (0, import_react.useState)({ w: 0, h: 0 });
+  (0, import_react.useEffect)(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const update = () => setBox({ w: el.clientWidth, h: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const g = frameGeometry(zoomOf(props.content), box.w, box.h);
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: wrapRef, className: "dsh-wt_frameWrap", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+    "iframe",
+    {
+      className: "dsh-wt_paneFrame",
+      src: props.src,
+      title: props.title,
+      style: g.scale === 1 ? { width: g.width, height: g.height } : { width: g.width, height: g.height, transform: "scale(" + g.scale + ")", transformOrigin: "top left" }
+    },
+    props.reloadKey
+  ) });
+}
+function FrameZoomSelect(props) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+    "select",
+    {
+      className: "dsh-wt_browserZoom",
+      title: T("pane.zoom"),
+      "aria-label": T("pane.zoom"),
+      value: zoomOf(props.content),
+      onChange: (e) => splitStore.setTabZoom(props.row, props.index, props.tabId, e.target.value),
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "100", children: T("pane.zoom100") }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "fit", children: T("pane.zoomFit") }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "125", children: T("pane.zoom125") })
+      ]
+    }
+  );
+}
+function FrameActions(props) {
+  const [tip, setTip] = (0, import_react.useState)("");
+  const tipTimer = (0, import_react.useRef)(null);
+  const httpUrl = /^https?:\/\//i.test(props.url) ? props.url : "";
+  const showTip = (kind) => {
+    setTip(kind);
+    if (tipTimer.current !== null) window.clearTimeout(tipTimer.current);
+    tipTimer.current = window.setTimeout(() => {
+      tipTimer.current = null;
+      setTip("");
+    }, 2200);
+  };
+  (0, import_react.useEffect)(() => () => {
+    if (tipTimer.current !== null) window.clearTimeout(tipTimer.current);
+  }, []);
+  const openExternal = () => {
+    if (!httpUrl) return;
+    let opened = null;
+    try {
+      opened = window.open(httpUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      opened = null;
+    }
+    if (!opened) void copyTextSafe(httpUrl).then((ok) => showTip(ok ? "fallback" : "fail"));
+  };
+  const copyLink = () => {
+    if (httpUrl) void copyTextSafe(httpUrl).then((ok) => showTip(ok ? "ok" : "fail"));
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+      "button",
+      {
+        type: "button",
+        className: "dsh-wt_browserGo",
+        disabled: !httpUrl,
+        title: T("pane.openExternal"),
+        "aria-label": T("pane.openExternal"),
+        onClick: openExternal,
+        children: "\u21F1"
+      }
+    ),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+      "button",
+      {
+        type: "button",
+        className: "dsh-wt_browserGo",
+        disabled: !httpUrl,
+        title: T("pane.copyLink"),
+        "aria-label": T("pane.copyLink"),
+        onClick: copyLink,
+        children: "\u29C9"
+      }
+    ),
+    tip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-wt_browserTip" + (tip === "fail" ? " dsh-wt_browserTipFail" : ""), role: "status", children: tip === "ok" ? T("pane.copied") : tip === "fallback" ? T("pane.openFallback") : T("pane.copyFail") })
+  ] });
+}
 function BrowserPane(props) {
   const initial = props.content?.url || "https://example.com";
   const [url, setUrl] = (0, import_react.useState)(initial);
   const [src, setSrc] = (0, import_react.useState)(initial);
   const go = () => {
-    const u = url.trim();
-    const ok = /^(\/|https?:\/\/)/i.test(u) ? u : "about:blank";
+    const ok = normalizeAddress(url);
     setSrc(ok);
     if (ok !== "about:blank") {
-      splitStore.setTabContent(props.row, props.index, props.tabId, { kind: "builtin", type: "browser", url: ok });
+      splitStore.setTabContent(props.row, props.index, props.tabId, keepZoom(props.content, { kind: "builtin", type: "browser", url: ok }));
     }
   };
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -18065,9 +18261,11 @@ function BrowserPane(props) {
           }
         }
       ),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-wt_browserGo", onClick: go, children: "\u2197" })
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-wt_browserGo", onClick: go, children: "\u2197" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameActions, { url: src }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameZoomSelect, { row: props.row, index: props.index, tabId: props.tabId, content: props.content })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("iframe", { className: "dsh-wt_paneFrame", src, title: "browser" }, props.reloadKey)
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameHost, { content: props.content, reloadKey: props.reloadKey, src, title: "browser" })
   ] });
 }
 function IframePane(props) {
@@ -18078,11 +18276,10 @@ function AnimPane(props) {
   const [url, setUrl] = (0, import_react.useState)(initial);
   const [src, setSrc] = (0, import_react.useState)(initial || "about:blank");
   const go = () => {
-    const u = url.trim();
-    const ok = /^(\/|https?:\/\/)/i.test(u) ? u : "about:blank";
+    const ok = normalizeAddress(url);
     setSrc(ok);
     if (ok !== "about:blank") {
-      splitStore.setTabContent(props.row, props.index, props.tabId, { kind: "builtin", type: "anim", url: ok });
+      splitStore.setTabContent(props.row, props.index, props.tabId, keepZoom(props.content, { kind: "builtin", type: "anim", url: ok }));
     }
   };
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -18099,9 +18296,11 @@ function AnimPane(props) {
           }
         }
       ),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-wt_browserGo", onClick: go, children: "\u2197" })
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-wt_browserGo", onClick: go, children: "\u2197" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameActions, { url: src }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameZoomSelect, { row: props.row, index: props.index, tabId: props.tabId, content: props.content })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("iframe", { className: "dsh-wt_paneFrame", src, title: "anim" }, props.reloadKey)
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameHost, { content: props.content, reloadKey: props.reloadKey, src, title: "anim" })
   ] });
 }
 function ThemeIcon({ mode, size }) {
@@ -19238,6 +19437,12 @@ function TerminalPane() {
       if (ws && ws.readyState === 1) ws.send(d);
     });
     const ro = new ResizeObserver(() => {
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        try {
+          term.refresh?.(0, Math.max(0, (term.rows ?? 24) - 1));
+        } catch {
+        }
+      }
       if (typeof term.fit === "function") {
         try {
           term.fit();
@@ -19645,6 +19850,27 @@ function PaneBody(props) {
   const tabs = pane.tabs ?? [];
   const active = Math.min(pane.active ?? 0, Math.max(0, tabs.length - 1));
   const [reloadKeys, setReloadKeys] = (0, import_react.useState)({});
+  const [addOpen, setAddOpen] = (0, import_react.useState)(false);
+  const [addPos, setAddPos] = (0, import_react.useState)(null);
+  const addBtnRef = (0, import_react.useRef)(null);
+  const addPopRef = (0, import_react.useRef)(null);
+  (0, import_react.useEffect)(() => {
+    if (!addOpen) return;
+    const onDown = (e) => {
+      const node = e.target;
+      if (node && (addBtnRef.current && addBtnRef.current.contains(node) || addPopRef.current && addPopRef.current.contains(node))) return;
+      setAddOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") setAddOpen(false);
+    };
+    document.addEventListener("mousedown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [addOpen]);
   if (tabs.length === 0) {
     return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PanePicker, { row, index });
   }
@@ -19654,61 +19880,90 @@ function PaneBody(props) {
   };
   const singleConsole = tabs.length === 1 && tabs[0].content?.kind === "builtin" && tabs[0].content.type === "console";
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-    !singleConsole && !pane.collapsed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-wt_tabBar", children: tabs.map((t, i) => {
-      const locked = t.content?.kind === "builtin" && t.content.type === "console";
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-        "span",
+    !singleConsole && !pane.collapsed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-wt_tabBar", children: [
+      tabs.map((t, i) => {
+        const locked = t.content?.kind === "builtin" && t.content.type === "console";
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "span",
+          {
+            className: "dsh-wt_tab" + (i === active ? " dsh-wt_tabOn" : ""),
+            title: t.title,
+            draggable: !locked,
+            onDragStart: (e) => {
+              dragTab = { row, index, tabId: t.id };
+              try {
+                e.dataTransfer.effectAllowed = "move";
+              } catch {
+              }
+            },
+            onDragEnd: () => {
+              dragTab = null;
+              setDropTarget(null);
+            },
+            onClick: () => splitStore.setActiveTab(row, index, t.id),
+            children: [
+              refreshableTab(t) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-wt_tabRefresh",
+                  title: T("pane.refresh"),
+                  "aria-label": T("pane.refresh"),
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    refreshTab(t);
+                  },
+                  children: "\u21BB"
+                }
+              ),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-wt_tabTitle", children: t.title }),
+              !locked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-wt_tabClose",
+                  title: T("pane.closeTab"),
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    splitStore.closeTab(row, index, t.id);
+                  },
+                  children: "\u2715"
+                }
+              )
+            ]
+          },
+          t.id
+        );
+      }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "button",
         {
-          className: "dsh-wt_tab" + (i === active ? " dsh-wt_tabOn" : ""),
-          title: t.title,
-          draggable: !locked,
-          onDragStart: (e) => {
-            dragTab = { row, index, tabId: t.id };
-            try {
-              e.dataTransfer.effectAllowed = "move";
-            } catch {
-            }
+          type: "button",
+          ref: addBtnRef,
+          className: "dsh-wt_tabAdd",
+          title: T("pane.addTab"),
+          "aria-label": T("pane.addTab"),
+          onClick: (e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setAddPos({ x: Math.max(8, Math.min(r.left, window.innerWidth - 208)), y: r.bottom + 4 });
+            setAddOpen((v) => !v);
           },
-          onDragEnd: () => {
-            dragTab = null;
-            setDropTarget(null);
-          },
-          onClick: () => splitStore.setActiveTab(row, index, t.id),
-          children: [
-            refreshableTab(t) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              "button",
-              {
-                type: "button",
-                className: "dsh-wt_tabRefresh",
-                title: T("pane.refresh"),
-                "aria-label": T("pane.refresh"),
-                onClick: (e) => {
-                  e.stopPropagation();
-                  refreshTab(t);
-                },
-                children: "\u21BB"
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-wt_tabTitle", children: t.title }),
-            !locked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              "button",
-              {
-                type: "button",
-                className: "dsh-wt_tabClose",
-                title: T("pane.closeTab"),
-                onClick: (e) => {
-                  e.stopPropagation();
-                  splitStore.closeTab(row, index, t.id);
-                },
-                children: "\u2715"
-              }
-            )
-          ]
-        },
-        t.id
-      );
-    }) }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneTabBody, { tab: tabs[active], row, index, paneTitle: pane.title, reloadKey: reloadKeys[tabs[active].id] ?? 0 })
+          children: "\uFF0B"
+        }
+      )
+    ] }),
+    addOpen && addPos && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: addPopRef, className: "dsh-wt_tabAddPop", style: { left: addPos.x, top: addPos.y }, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-wt_tabAddPopBody", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+      PanePicker,
+      {
+        row,
+        index,
+        onPick: (content) => {
+          setAddOpen(false);
+          splitStore.openTab(row, index, content);
+        }
+      }
+    ) }) }),
+    tabs.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-wt_tabWrap", hidden: i !== active, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneTabBody, { tab: t, row, index, paneTitle: pane.title, reloadKey: reloadKeys[t.id] ?? 0 }) }, t.id))
   ] });
 }
 function PanePicker(props) {
@@ -19728,7 +19983,13 @@ function PanePicker(props) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const pick = (content) => splitStore.openTab(props.row, props.index, content);
+  const pick = (content) => {
+    if (props.onPick) {
+      props.onPick(content);
+      return;
+    }
+    splitStore.openTab(props.row, props.index, content);
+  };
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { ref: hostRef, className: "dsh-wt_panePicker dsh-wt_panePicker-" + mode, children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { type: "button", className: "dsh-wt_panePick", onClick: () => pick({ kind: "builtin", type: "browser" }), children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { "aria-hidden": true, children: "\u{1F310}" }),
@@ -20541,8 +20802,8 @@ var WAVE_BG_B64 = "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAYEBQUFBAYFBQUHBgYHCQ8KCQgIC
 
 // src/client/index.tsx
 var import_jsx_runtime2 = require("react/jsx-runtime");
-var LOCAL_VERSION2 = false ? "dev" : "0.4.0";
-var UPDATE_REPO2 = "Aisland-SJL/dsh-worktable";
+var LOCAL_VERSION2 = false ? "dev" : "0.4.1";
+var UPDATE_REPO2 = "qiudl/dsh-worktable";
 var { command: UPGRADE_CMD, prompt: UPGRADE_AI2, desktop: DESKTOP_HOST } = worktableUpgrade();
 var ICON_SYNC = /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 16 16", "aria-hidden": true, children: [
   /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round", d: "M1.5 8a6.5 6.5 0 0 1 11.1-4.6L14.5 5" }),
@@ -20576,6 +20837,63 @@ async function copyText(text2) {
 }
 var PERSIST_KEY2 = "dsh.worktable.view.v1";
 var PROJECTS_KEY = "dsh.worktable.projects.v1";
+var cloudStatePath = null;
+var CLOUD_SYNC_ENABLED = true;
+var CLOUD_PUSH_DEBOUNCE_MS = 800;
+async function loadCloudStatePath() {
+  try {
+    const r = await fetch("/api/worktable/local-paths", { cache: "no-store" });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const p = typeof d?.cloudState === "string" ? d.cloudState.trim() : "";
+    return p || null;
+  } catch {
+    return null;
+  }
+}
+var cloudStateGetter = null;
+var cloudPushTimer = null;
+var cloudHydrated = false;
+function projectsPopulated(p) {
+  if (!p || typeof p !== "object") return false;
+  const size = (v) => Array.isArray(v) ? v.length : v && typeof v === "object" ? Object.keys(v).length : 0;
+  const o = p;
+  return size(o.order) + size(o.layouts) + size(o.folders) + size(o.bindings) + size(o.shortcuts) + size(o.nameOverrides) + size(o.iconOverrides) + size(o.removed) > 0;
+}
+function scheduleCloudPush() {
+  if (!CLOUD_SYNC_ENABLED || !cloudStatePath || !cloudStateGetter || !cloudHydrated) return;
+  if (cloudPushTimer !== null) clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(() => {
+    cloudPushTimer = null;
+    try {
+      const get = cloudStateGetter;
+      const path = cloudStatePath;
+      if (!get || !path) return;
+      const content = JSON.stringify({ ...get(), updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 1);
+      void fetch("/api/worktable/write", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, content })
+      }).catch(() => {
+      });
+    } catch {
+    }
+  }, CLOUD_PUSH_DEBOUNCE_MS);
+}
+async function fetchCloudState() {
+  const path = cloudStatePath;
+  if (!CLOUD_SYNC_ENABLED || !path) return null;
+  try {
+    const r = await fetch("/api/worktable/file?path=" + encodeURIComponent(path), { cache: "no-store" });
+    if (!r.ok) return null;
+    const raw = (await r.text()).trim();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 var MIN_TOP = 56;
 var SNAP_PX = 32;
 var LEGACY_BUMP_COOLDOWN = 15e3;
@@ -21818,6 +22136,7 @@ function WorktableSection(props) {
       }
       return next;
     });
+    scheduleCloudPush();
   };
   const persistProjects = (patch) => {
     setProjects((prev) => {
@@ -21828,7 +22147,68 @@ function WorktableSection(props) {
       }
       return next;
     });
+    scheduleCloudPush();
   };
+  (0, import_react2.useEffect)(() => {
+    let cancelled = false;
+    cloudStateGetter = () => ({ view: viewRef.current, projects: projectsRef.current?.projects ?? null });
+    void (async () => {
+      cloudStatePath = await loadCloudStatePath();
+      if (cancelled) return;
+      if (!cloudStatePath) {
+        try {
+          if (typeof console !== "undefined" && console.info) console.info("[dsh-worktable] \u672A\u914D\u7F6E\u672C\u673A\u4E91\u72B6\u6001\u8DEF\u5F84\uFF0803_local/local.json \u7684 cloudStatePath\uFF09\uFF0C\u4E91\u540C\u6B65\u5DF2\u505C\u7528\uFF1B\u672C\u5730\u72B6\u6001\u8BFB\u5199\u4E0D\u53D7\u5F71\u54CD\u3002");
+        } catch {
+        }
+        return;
+      }
+      let cloud = null;
+      try {
+        cloud = await fetchCloudState();
+      } catch {
+        cloud = null;
+      }
+      if (cancelled) return;
+      const cloudView = cloud && cloud.view != null ? cloud.view : null;
+      const cloudProjects = cloud && cloud.projects != null ? cloud.projects : null;
+      let localProjects = null;
+      try {
+        const raw = localStorage.getItem(PROJECTS_KEY);
+        localProjects = raw ? JSON.parse(raw) : null;
+      } catch {
+        localProjects = null;
+      }
+      const localViewRaw = localStorage.getItem(PERSIST_KEY2);
+      let restored = false;
+      if (cloudProjects !== null && projectsPopulated(cloudProjects) && !projectsPopulated(localProjects)) {
+        try {
+          localStorage.setItem(PROJECTS_KEY, JSON.stringify(cloudProjects));
+        } catch {
+        }
+        restored = true;
+      }
+      if (cloudView !== null && localViewRaw === null) {
+        try {
+          localStorage.setItem(PERSIST_KEY2, JSON.stringify(cloudView));
+        } catch {
+        }
+        restored = true;
+      }
+      if (cancelled) return;
+      if (restored) {
+        setView(loadView());
+        setProjects(loadProjects());
+      }
+      cloudHydrated = true;
+      scheduleCloudPush();
+    })().finally(() => {
+      cloudHydrated = true;
+    });
+    return () => {
+      cancelled = true;
+      cloudStateGetter = null;
+    };
+  }, []);
   (0, import_react2.useEffect)(() => {
     const saved = projects.views[CONSOLE_ID];
     if (!specHasConsoleTab(saved)) {

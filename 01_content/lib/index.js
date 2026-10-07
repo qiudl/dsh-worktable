@@ -115,7 +115,7 @@ function resolveDshHomeSafe() {
   cachedDshHome = baseDshHome();
   return cachedDshHome;
 }
-var PLUGIN_VERSION = false ? "dev" : "0.4.0";
+var PLUGIN_VERSION = false ? "dev" : "0.4.1";
 var name = "dsh-worktable";
 var inject = ["webServer", "sessions"];
 var HEALTH_PATH = "/api/worktable/health";
@@ -324,6 +324,29 @@ function setupTerminal(webServer, ctx) {
     }
   }), "dsh-worktable: terminal upgrade");
 }
+function localConfigPaths(fileName) {
+  const libDir = dirname(fileURLToPath(import.meta.url));
+  const out = [];
+  const envDir = process.env.DSH_WORKTABLE_LOCAL_DIR;
+  if (typeof envDir === "string" && envDir.trim()) out.push(pathResolve(envDir.trim(), fileName));
+  out.push(pathResolve(libDir, "..", "03_local", fileName));
+  out.push(pathResolve(libDir, "..", "..", "03_local", fileName));
+  out.push(pathResolve(libDir, "..", "..", "..", "03_local", fileName));
+  return out;
+}
+async function readLocalConfigField(fileName, field) {
+  for (const file of localConfigPaths(fileName)) {
+    try {
+      const raw = await readFile(file, "utf8");
+      const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
+      const value = parsed && typeof parsed === "object" ? parsed[field] : void 0;
+      const text = typeof value === "string" ? value.trim() : "";
+      if (text) return text;
+    } catch {
+    }
+  }
+  return null;
+}
 function apply(ctx) {
   const webServer = ctx.webServer;
   if (!webServer) {
@@ -473,6 +496,13 @@ function apply(ctx) {
       } catch (err) {
         json(res, 500, { path: "", entries: [], truncated: false, error: String(err) });
       }
+    }
+  });
+  webServer.register({
+    kind: "exact",
+    path: "/api/worktable/local-paths",
+    handler: async (_req, res) => {
+      json(res, 200, { cloudState: await readLocalConfigField("local.json", "cloudStatePath") });
     }
   });
   webServer.register({

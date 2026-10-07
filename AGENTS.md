@@ -126,7 +126,7 @@ node --check lib/index.js
 ## 安装 / 重启
 
 - 注册：`dsh plugin --profile web add "link:<repo>/01_content"`（写 ~/.dsh，需用户授权）。
-- 发布版安装（给用户）：`dsh plugin --profile web add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"`（依赖每个 Release 的固定名资产）。
+- 发布版安装（给用户）：`dsh plugin --profile web add "https://github.com/qiudl/dsh-worktable/releases/latest/download/dsh-worktable.tgz"`（依赖每个 Release 的固定名资产）。
 - Desktop：用实际安装目录 resources/runtime/cli/bin/dsh.cmd 对 desktop profile 安装；不得以网页 CLI 或不固定 npx 替代。安装前用户完整退出，安装后用户手动重开。
 - bundle 启动时组合：网页重启 dsh web 并刷新；桌面完整退出/手动重开。不得自动重启正式宿主。
 

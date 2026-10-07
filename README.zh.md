@@ -60,13 +60,13 @@
    **A · 一行命令（推荐）** —— 直接安装 GitHub Release 的安装包，无需 Git：
 
    ```bash
-   dsh plugin --profile web add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
+   dsh plugin --profile web add "https://github.com/qiudl/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
    ```
 
    **B · 本地克隆（想改源码用）** —— `link:` 只接受本地绝对路径（路径不要带空格）：
 
    ```bash
-   git clone https://github.com/Aisland-SJL/dsh-worktable.git
+   git clone https://github.com/qiudl/dsh-worktable.git
    dsh plugin --profile web add "link:<克隆出来的 dsh-worktable 仓库目录的绝对路径>/01_content"
    # 例：克隆到 D:\tools 后 → dsh plugin --profile web add "link:D:/tools/dsh-worktable/01_content"
    ```
@@ -81,7 +81,7 @@
 先保存任务，从应用菜单/托盘完整退出（只关窗口不够）；将安装目录占位符替换为实际位置，在 PowerShell 执行，再手动重新打开：
 
 ```powershell
-& "<桌面端安装目录>\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add "https://github.com/Aisland-SJL/dsh-worktable/releases/download/v0.4.0/dsh-worktable-0.4.0.tgz"
+& "<桌面端安装目录>\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add "https://github.com/qiudl/dsh-worktable/releases/download/v0.4.0/dsh-worktable-0.4.0.tgz"
 ```
 
 必须使用桌面端自带 CLI 与 `desktop` profile，不用不固定版本的 npx 或网页 CLI 代替。保留实际 DSH_HOME；即便共用会话数据目录，网页与桌面来源的项目/布局/媒体也不会自动同步。
@@ -131,7 +131,7 @@ node --check lib/index.js
 - 网页端可重跑安装命令（安装最新已发布版本），装完重启 dsh web 并刷新；桌面用户须用上方桌面安装步骤：
 
   ```bash
-  dsh plugin --profile web add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
+  dsh plugin --profile web add "https://github.com/qiudl/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
   ```
 
 **情况 B：Harness 本身挂了**（服务起不来 / 报 Failed to load plugins）

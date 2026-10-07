@@ -249,6 +249,37 @@ function setupTerminal(webServer: any, ctx: any) {
   }), 'dsh-worktable: terminal upgrade')
 }
 
+/** 本机配置候选路径（03_local/*.json：.gitignore 的本机目录，不入库）。
+ *  查找顺序：环境变量 DSH_WORKTABLE_LOCAL_DIR（指向配置目录）→ <插件根>/03_local →
+ *  仓库根/03_local → 仓库上一层/03_local（相对深度都试，避免放错一层）。
+ *  个人绝对路径只存在于这些配置文件里，src/、README、package.json 与打包产物中零出现。 */
+function localConfigPaths(fileName: string): string[] {
+  const libDir = dirname(fileURLToPath(import.meta.url))
+  const out: string[] = []
+  const envDir = process.env.DSH_WORKTABLE_LOCAL_DIR
+  if (typeof envDir === 'string' && envDir.trim()) out.push(pathResolve(envDir.trim(), fileName))
+  out.push(pathResolve(libDir, '..', '03_local', fileName))
+  out.push(pathResolve(libDir, '..', '..', '03_local', fileName))
+  out.push(pathResolve(libDir, '..', '..', '..', '03_local', fileName))
+  return out
+}
+
+/** 按候选路径读本机配置里的一个字符串字段（只读、绝不抛错）：
+ *  文件缺失 / 坏 JSON / 字段缺失或空串 → 继续试下一个候选；全都没命中 → null。 */
+async function readLocalConfigField(fileName: string, field: string): Promise<string | null> {
+  for (const file of localConfigPaths(fileName)) {
+    try {
+      const raw = await readFile(file, 'utf8')
+      // 容忍 BOM（外部工具改写可能带 EF BB BF，JSON.parse 会抛错）
+      const parsed = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw)
+      const value = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>)[field] : undefined
+      const text = typeof value === 'string' ? value.trim() : ''
+      if (text) return text
+    } catch {}
+  }
+  return null
+}
+
 export function apply(ctx: Context) {
   const webServer = (ctx as any).webServer
   if (!webServer) {
@@ -361,6 +392,16 @@ export function apply(ctx: Context) {
       } catch (err) {
         json(res, 500, { path: '', entries: [], truncated: false, error: String(err) })
       }
+    },
+  })
+
+  // 本机路径配置（03_local/local.json）：只读下发云状态文件路径；
+  // 未配置/读不到 → 200 { cloudState: null }，客户端据此整体停用云同步（本地状态不受影响）。
+  webServer.register({
+    kind: 'exact',
+    path: '/api/worktable/local-paths',
+    handler: async (_req: any, res: any) => {
+      json(res, 200, { cloudState: await readLocalConfigField('local.json', 'cloudStatePath') })
     },
   })
 

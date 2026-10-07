@@ -29,9 +29,13 @@ hljs.registerLanguage('json', hljsJson)
 
 export type BuiltinType = 'browser' | 'anim' | 'explorer' | 'scm' | 'tasks' | 'terminal' | 'custom' | 'console'
 
+/** 浏览器/动画标签的缩放档：'100' 默认（填满窗格，与旧行为一致）/ 'fit' 适应宽度 / '125' 放大 25%。
+ *  存在 content 里 → 按标签持久化；旧存档没有该字段 = '100'（向后兼容）。 */
+export type FrameZoom = '100' | 'fit' | '125'
+
 export type SplitContent =
   | { kind: 'iframe'; url: string; title?: string }
-  | { kind: 'builtin'; type: BuiltinType; url?: string }
+  | { kind: 'builtin'; type: BuiltinType; url?: string; zoom?: FrameZoom }
   | { kind: 'file'; path: string }
 
 /** 一个内容标签页 */
@@ -118,6 +122,8 @@ type SplitState = {
   /** 锁定窗格：清空原有标签，把内容作为该窗唯一的固定标签（挂载产物的「锁死」语义） */
   lockPane(row: PaneRow, i: number, content: SplitContent): void
   closeTab(row: PaneRow, i: number, tabId: string): void
+  /** 只改某个标签内容的缩放档（不改标题、不撤销挂载归属；旧存档无此字段 = '100'） */
+  setTabZoom(row: PaneRow, i: number, tabId: string, zoom: FrameZoom): void
   setActiveTab(row: PaneRow, i: number, tabId: string): void
   toggleCollapsed(row: PaneRow, i: number): void
   moveTab(fromRow: PaneRow, fromI: number, tabId: string, toRow: PaneRow, toI: number): void
@@ -175,11 +181,24 @@ function basenameOf(p: string): string {
   return parts[parts.length - 1] || String(p)
 }
 
-/** 内容同一性（openTab 去重：同窗内同内容只保留一个标签，再次打开切过去） */
+/** 内容同一性（openTab 去重：同窗内同内容只保留一个标签，再次打开切过去）。
+ *  浏览器/动画是「独立页面」：身份就是网址（非空且相同才去重）；**新建出来的空白标签没有网址，
+ *  永远算新内容** → 同一窗格里可以同时开多个浏览器标签（旧实现只比 type，导致第二个浏览器标签
+ *  永远开不出来，连"两个不同网址"也会被并成一个）。
+ *  其它 builtin（终端/资源管理器/SCM/任务/自定义/控制室）仍按类型去重；iframe / 本地文件仍按 URL/路径去重
+ *  （资源管理器点同一个文件两次 = 激活已有预览，语义不变）。 */
 function sameContent(a: SplitContent, b: SplitContent): boolean {
   if (a.kind === 'iframe' && b.kind === 'iframe') return a.url === b.url
   if (a.kind === 'file' && b.kind === 'file') return a.path === b.path
-  if (a.kind === 'builtin' && b.kind === 'builtin') return a.type === b.type
+  if (a.kind === 'builtin' && b.kind === 'builtin') {
+    if (a.type !== b.type) return false
+    if (a.type === 'browser' || a.type === 'anim') {
+      const ua = (a.url ?? '').trim()
+      const ub = (b.url ?? '').trim()
+      return ua !== '' && ua === ub
+    }
+    return true
+  }
   return false
 }
 
@@ -1127,10 +1146,38 @@ export const splitStore: SplitState = {
       // 去重：同内容已有标签 → 直接激活
       const existing = tabs.findIndex((t) => sameContent(t.content, content))
       if (existing >= 0) return { ...pane, content: null, tabs, active: existing }
-      const tab: PaneTab = { id: 't' + Date.now().toString(36), title: tabTitleOf(content), content }
+      // id 带随机后缀：同一毫秒内连续新建多个标签（现在浏览器标签可以连开）也必须互不相同，
+      // 否则 React key 重复会让保活包裹层错位（与 lockPane 的 id 生成方式保持一致）。
+      const tab: PaneTab = { id: 't' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2), title: tabTitleOf(content), content }
       tabs.push(tab)
       return { ...pane, content: null, tabs, active: tabs.length - 1 }
     }
+    if (row === 'left') {
+      if (!spec.left || i !== 0) return
+      this.spec = { ...spec, left: mutate(spec.left) }
+    } else if (row === 'top') {
+      const top = [...(spec.top ?? [])]
+      if (!top[i]) return
+      top[i] = mutate(top[i])
+      this.spec = { ...spec, top }
+    } else {
+      const main = [...spec.main]
+      if (!main[i]) return
+      main[i] = mutate(main[i])
+      this.spec = { ...spec, main }
+    }
+    this.onSpecMutated?.(this.spec)
+    this.persist()
+    this.notify()
+  },
+
+  setTabZoom(row, i, tabId, zoom) {
+    const spec = this.spec
+    if (!spec) return
+    const mutate = (pane: SplitPane): SplitPane => ({
+      ...pane,
+      tabs: (pane.tabs ?? []).map((t) => (t.id === tabId ? { ...t, content: { ...t.content, zoom } } : t)),
+    })
     if (row === 'left') {
       if (!spec.left || i !== 0) return
       this.spec = { ...spec, left: mutate(spec.left) }
@@ -1403,18 +1450,146 @@ function makeDividerHandler(kind: 'left' | 'chat' | 'top' | 'pane' | 'topPane', 
   }
 }
 
+/** 缩放模式下给 iframe 的固定逻辑宽（站点按这个宽度排版，再整体缩放）。跨域读不到页面真实宽度，
+ *  所以只能固定值；1280 覆盖 QQ音乐/y.qq.com（其 CSS 定宽 1240px）这类桌面站点。 */
+const FRAME_LOGICAL_W = 1280
+
+/** iframe 的宽高与缩放（纯函数，便于单测）：
+ *  - '100'：填满窗格（与改动前完全一致的盒模型，站点照常按窗格宽自适应）；
+ *  - 'fit'：窗格窄于逻辑宽 → 按 逻辑宽 排版后等比缩到窗格宽；窗格更宽 → 不放大，直接填满（不放大就不留白）；
+ *  - '125'：逻辑宽下放大 1.25 倍；窗格很宽时把逻辑宽加大到刚好铺满（避免右侧留白），
+ *           窗格很窄时保持逻辑宽 1280 → 缩放后超出窗格，由外层容器横向滚动查看。 */
+function frameGeometry(mode: FrameZoom, wrapW: number, wrapH: number): { width: number | string; height: number | string; scale: number } {
+  if (mode === '100' || !(wrapW > 0) || !(wrapH > 0)) return { width: '100%', height: '100%', scale: 1 }
+  const logical = mode === 'fit' ? Math.max(FRAME_LOGICAL_W, wrapW) : Math.max(FRAME_LOGICAL_W, wrapW / 1.25)
+  const scale = mode === 'fit' ? Math.min(1, wrapW / logical) : 1.25
+  return { width: logical, height: Math.max(1, Math.round(wrapH / scale)), scale }
+}
+
+/** 取标签当前的缩放档（缺失/非三档合法值 → '100'，兼容旧存档与脏数据） */
+function zoomOf(content: SplitContent): FrameZoom {
+  const z = content.kind === 'builtin' ? content.zoom : undefined
+  return z === 'fit' || z === '125' ? z : '100'
+}
+
+/** 地址栏回车回写内容时保留该标签的缩放档：setTabContent 是整对象替换，
+ *  不带上 zoom 的话，一跳转就把「适应宽度」重置回 100%（每个标签的档位必须各自独立且稳定）。 */
+function keepZoom(prev: SplitContent, next: SplitContent): SplitContent {
+  const z = zoomOf(prev)
+  return z === '100' ? next : { ...next, zoom: z }
+}
+
+/** 地址栏输入归一化（纯函数，BrowserPane / AnimPane 共用）：
+ *  - 已带 `http(s)://` 或以 `/` 开头 → 原样（相对路径交给站点托管路由）；
+ *  - `host[:port][/path]`（含点、无内部空格、无协议，如 music.qq.com、a.com:8080/x）→ 补 `https://`；
+ *    `localhost[:port][/path]` 也补（本地开发常用；比"必须含点"多这一支，去掉即回到严格版）；
+ *  - 其它（空、含空格、不像域名、非 http(s) 的 scheme）→ `'about:blank'`（保持既有行为）。
+ *  注意：不补前缀时会被判成 about:blank，iframe 只剩底色 → 看上去就是"黑页"。 */
+function normalizeAddress(input: string): string {
+  const u = String(input ?? '').trim()
+  if (!u) return 'about:blank'
+  if (/^(\/|https?:\/\/)/i.test(u)) return u
+  if (/\s/.test(u)) return 'about:blank'
+  if (/^localhost(:\d{1,5})?([/?#].*)?$/i.test(u)) return 'https://' + u
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d{1,5})?([/?#].*)?$/i.test(u)) return 'https://' + u
+  return 'about:blank'
+}
+
+/** iframe 承载层：外层容器负责测量窗格可用宽高（ResizeObserver）+ 缩放后的横向滚动；
+ *  iframe 自己由 frameGeometry 给出内联宽高与 transform（不改 iframe 的加载方式，因此不 remount）。 */
+function FrameHost(props: { content: SplitContent; reloadKey: number; src: string; title: string }) {
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const update = () => setBox({ w: el.clientWidth, h: el.clientHeight })
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const g = frameGeometry(zoomOf(props.content), box.w, box.h)
+  return (
+    <div ref={wrapRef} className="dsh-wt_frameWrap">
+      <iframe
+        key={props.reloadKey}
+        className="dsh-wt_paneFrame"
+        src={props.src}
+        title={props.title}
+        style={g.scale === 1 ? { width: g.width, height: g.height } : { width: g.width, height: g.height, transform: 'scale(' + g.scale + ')', transformOrigin: 'top left' }}
+      />
+    </div>
+  )
+}
+
+/** 缩放档三选一；改动只写 content.zoom（不改标题、不触发挂载归属撤销） */
+function FrameZoomSelect(props: { row: PaneRow; index: number; tabId: string; content: SplitContent }) {
+  return (
+    <select
+      className="dsh-wt_browserZoom"
+      title={T('pane.zoom')}
+      aria-label={T('pane.zoom')}
+      value={zoomOf(props.content)}
+      onChange={(e) => splitStore.setTabZoom(props.row, props.index, props.tabId, e.target.value as FrameZoom)}
+    >
+      <option value="100">{T('pane.zoom100')}</option>
+      <option value="fit">{T('pane.zoomFit')}</option>
+      <option value="125">{T('pane.zoom125')}</option>
+    </select>
+  )
+}
+
+/** 工具栏两个动作：在系统浏览器打开 / 复制链接。
+ *  必须是**顶层文档**里的可信点击 —— Slark 宿主只认顶层 click 打手势（app.asar：
+ *  document.addEventListener('click', … ipcRenderer.send('slark:link:gesture'))），
+ *  iframe 内部点击不会冒泡到顶层，所以站点自己的弹窗才开不了；我们自己的按钮可以。
+ *  window.open 返回 falsy（被拒/被宿主接管：宿主 setWindowOpenHandler 永远 deny 后自行路由）
+ *  时退化成「复制链接 + 提示」。非 http(s) 不给开（宿主 browserAddress 只放行 http/https）。 */
+function FrameActions(props: { url: string }) {
+  const [tip, setTip] = useState<'' | 'ok' | 'fallback' | 'fail'>('')
+  const tipTimer = useRef<number | null>(null)
+  const httpUrl = /^https?:\/\//i.test(props.url) ? props.url : ''
+  const showTip = (kind: 'ok' | 'fallback' | 'fail') => {
+    setTip(kind)
+    if (tipTimer.current !== null) window.clearTimeout(tipTimer.current)
+    tipTimer.current = window.setTimeout(() => { tipTimer.current = null; setTip('') }, 2200)
+  }
+  useEffect(() => () => { if (tipTimer.current !== null) window.clearTimeout(tipTimer.current) }, [])
+  const openExternal = () => {
+    if (!httpUrl) return
+    let opened: unknown = null
+    try { opened = window.open(httpUrl, '_blank', 'noopener,noreferrer') } catch { opened = null }
+    // noopener 语义下本返回值恒为 null，所以这里不是"失败判定"而是双保险：没开出来也能粘贴。
+    if (!opened) void copyTextSafe(httpUrl).then((ok) => showTip(ok ? 'fallback' : 'fail'))
+  }
+  const copyLink = () => { if (httpUrl) void copyTextSafe(httpUrl).then((ok) => showTip(ok ? 'ok' : 'fail')) }
+  return (
+    <>
+      <button type="button" className="dsh-wt_browserGo" disabled={!httpUrl}
+        title={T('pane.openExternal')} aria-label={T('pane.openExternal')} onClick={openExternal}>⇱</button>
+      <button type="button" className="dsh-wt_browserGo" disabled={!httpUrl}
+        title={T('pane.copyLink')} aria-label={T('pane.copyLink')} onClick={copyLink}>⧉</button>
+      {tip && (
+        <span className={'dsh-wt_browserTip' + (tip === 'fail' ? ' dsh-wt_browserTipFail' : '')} role="status">
+          {tip === 'ok' ? T('pane.copied') : tip === 'fallback' ? T('pane.openFallback') : T('pane.copyFail')}
+        </span>
+      )}
+    </>
+  )
+}
+
 /** 浏览器内置窗：地址栏 + 前往；刷新统一在标签栏最左（重挂载 iframe，跨域也可靠） */
 function BrowserPane(props: { row: PaneRow; index: number; tabId: string; content: SplitContent; reloadKey: number }) {
   const initial = props.content?.url || 'https://example.com'
   const [url, setUrl] = useState(initial)
   const [src, setSrc] = useState(initial)
   const go = () => {
-    const u = url.trim()
-    const ok = /^(\/|https?:\/\/)/i.test(u) ? u : 'about:blank'
+    const ok = normalizeAddress(url)
     setSrc(ok)
     if (ok !== 'about:blank') {
-      // 地址回写：刷新/重开布局时保持当前网址
-      splitStore.setTabContent(props.row, props.index, props.tabId, { kind: 'builtin', type: 'browser', url: ok })
+      // 地址回写：刷新/重开布局时保持当前网址（并保留本标签的缩放档）
+      splitStore.setTabContent(props.row, props.index, props.tabId, keepZoom(props.content, { kind: 'builtin', type: 'browser', url: ok }))
     }
   }
   return (
@@ -1428,8 +1603,10 @@ function BrowserPane(props: { row: PaneRow; index: number; tabId: string; conten
           onKeyDown={(e) => { if (e.key === 'Enter') go() }}
         />
         <button type="button" className="dsh-wt_browserGo" onClick={go}>↗</button>
+        <FrameActions url={src} />
+        <FrameZoomSelect row={props.row} index={props.index} tabId={props.tabId} content={props.content} />
       </div>
-      <iframe key={props.reloadKey} className="dsh-wt_paneFrame" src={src} title="browser" />
+      <FrameHost content={props.content} reloadKey={props.reloadKey} src={src} title="browser" />
     </>
   )
 }
@@ -1445,11 +1622,10 @@ function AnimPane(props: { row: PaneRow; index: number; tabId: string; content: 
   const [url, setUrl] = useState(initial)
   const [src, setSrc] = useState(initial || 'about:blank')
   const go = () => {
-    const u = url.trim()
-    const ok = /^(\/|https?:\/\/)/i.test(u) ? u : 'about:blank'
+    const ok = normalizeAddress(url)
     setSrc(ok)
     if (ok !== 'about:blank') {
-      splitStore.setTabContent(props.row, props.index, props.tabId, { kind: 'builtin', type: 'anim', url: ok })
+      splitStore.setTabContent(props.row, props.index, props.tabId, keepZoom(props.content, { kind: 'builtin', type: 'anim', url: ok }))
     }
   }
   return (
@@ -1463,8 +1639,10 @@ function AnimPane(props: { row: PaneRow; index: number; tabId: string; content: 
           onKeyDown={(e) => { if (e.key === 'Enter') go() }}
         />
         <button type="button" className="dsh-wt_browserGo" onClick={go}>↗</button>
+        <FrameActions url={src} />
+        <FrameZoomSelect row={props.row} index={props.index} tabId={props.tabId} content={props.content} />
       </div>
-      <iframe key={props.reloadKey} className="dsh-wt_paneFrame" src={src} title="anim" />
+      <FrameHost content={props.content} reloadKey={props.reloadKey} src={src} title="anim" />
     </>
   )
 }
@@ -2443,6 +2621,11 @@ function TerminalPane() {
     ws.onerror = () => { if (!disposed) setFailed(T('pane.termFail')) }
     term.onData((d: string) => { if (ws && ws.readyState === 1) ws.send(d) })
     const ro = new ResizeObserver(() => {
+      // 标签保活：本窗可能从「隐藏（0×0）」切回可见。可见时主动重绘一次，
+      // 避免 xterm 画布停在隐藏前那一帧（切回标签看到空白）。隐藏期间（0 尺寸）跳过。
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        try { term.refresh?.(0, Math.max(0, (term.rows ?? 24) - 1)) } catch {}
+      }
       if (typeof term.fit === 'function') {
         try { term.fit() } catch {}
         if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
@@ -2850,6 +3033,27 @@ function PaneBody(props: { pane: SplitPane; row: PaneRow; index: number }) {
   const tabs = pane.tabs ?? []
   const active = Math.min(pane.active ?? 0, Math.max(0, tabs.length - 1))
   const [reloadKeys, setReloadKeys] = useState<Record<string, number>>({})
+  // 「＋」追加标签：下拉开关 + 锚点坐标（fixed 定位，避开 tabBar 的 overflow 裁剪）
+  const [addOpen, setAddOpen] = useState(false)
+  const [addPos, setAddPos] = useState<{ x: number; y: number } | null>(null)
+  const addBtnRef = useRef<HTMLButtonElement | null>(null)
+  const addPopRef = useRef<HTMLDivElement | null>(null)
+  // 点外部 / Esc 关闭下拉（捕获阶段监听：下拉本身与「＋」按钮上的点击不算外部）
+  useEffect(() => {
+    if (!addOpen) return
+    const onDown = (e: MouseEvent) => {
+      const node = e.target as Node | null
+      if (node && ((addBtnRef.current && addBtnRef.current.contains(node)) || (addPopRef.current && addPopRef.current.contains(node)))) return
+      setAddOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setAddOpen(false) }
+    document.addEventListener('mousedown', onDown, true)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown, true)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [addOpen])
   if (tabs.length === 0) {
     return <PanePicker row={row} index={index} />
   }
@@ -2897,16 +3101,50 @@ function PaneBody(props: { pane: SplitPane; row: PaneRow; index: number }) {
           </span>
           )
         })}
+        <button
+          type="button"
+          ref={addBtnRef}
+          className="dsh-wt_tabAdd"
+          title={T('pane.addTab')}
+          aria-label={T('pane.addTab')}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            setAddPos({ x: Math.max(8, Math.min(r.left, window.innerWidth - 208)), y: r.bottom + 4 })
+            setAddOpen((v) => !v)
+          }}
+        >＋</button>
       </div>
       )}
-      <PaneTabBody tab={tabs[active]} row={row} index={index} paneTitle={pane.title} reloadKey={reloadKeys[tabs[active].id] ?? 0} />
+      {addOpen && addPos && (
+        <div ref={addPopRef} className="dsh-wt_tabAddPop" style={{ left: addPos.x, top: addPos.y }}>
+          <div className="dsh-wt_tabAddPopBody">
+            <PanePicker
+              row={row}
+              index={index}
+              onPick={(content) => { setAddOpen(false); splitStore.openTab(row, index, content) }}
+            />
+          </div>
+        </div>
+      )}
+      {/* 标签保活：所有标签都保持挂载，切换标签只隐藏不卸载。
+          终端标签因此保留会话与回滚缓冲；iframe 标签切回不重新加载。
+          包裹层在激活时 display:contents —— 不生成盒子，其内容仍直接参与 .dsh-wt_pane 的
+          flex 布局（与只渲染激活标签时逐像素一致）；非激活时 hidden 属性生效 → display:none。
+          key 固定为 tab.id 且列表顺序不变，React 才会跨切换保留各标签子树。
+          真正卸载只发生在关闭该标签（tabs 里移除该项）或整个工作区被销毁时。 */}
+      {tabs.map((t, i) => (
+        <div key={t.id} className="dsh-wt_tabWrap" hidden={i !== active}>
+          <PaneTabBody tab={t} row={row} index={index} paneTitle={pane.title} reloadKey={reloadKeys[t.id] ?? 0} />
+        </div>
+      ))}
     </>
   )
 }
 
 /** 未指派内容：4 选 1 选择器。按钮固定大小、整体居中；
- * 按窗位宽高比自适应排列：宽窗横排 4 连 / 方窗 2×2 / 竖窗竖排。 */
-function PanePicker(props: { row: PaneRow; index: number }) {
+ * 按窗位宽高比自适应排列：宽窗横排 4 连 / 方窗 2×2 / 竖窗竖排。
+ * onPick 缺省 = 打开到该窗格（空窗态调用方不传，行为与既有完全一致）。 */
+function PanePicker(props: { row: PaneRow; index: number; onPick?: (content: SplitContent) => void }) {
   const [mode, setMode] = useState<'row' | 'grid' | 'col'>('grid')
   const hostRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
@@ -2923,7 +3161,10 @@ function PanePicker(props: { row: PaneRow; index: number }) {
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
-  const pick = (content: SplitContent) => splitStore.openTab(props.row, props.index, content)
+  const pick = (content: SplitContent) => {
+    if (props.onPick) { props.onPick(content); return }
+    splitStore.openTab(props.row, props.index, content)
+  }
   return (
     <div ref={hostRef} className={'dsh-wt_panePicker dsh-wt_panePicker-' + mode}>
       <button type="button" className="dsh-wt_panePick" onClick={() => pick({ kind: 'builtin', type: 'browser' })}>

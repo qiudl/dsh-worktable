@@ -31,7 +31,7 @@ type DockMode = 'footer' | 'float'
 // ── 更新检查（客户端直连 GitHub Releases API，只读 GET；失败静默）──
 declare const __WT_VERSION__: string
 const LOCAL_VERSION = typeof __WT_VERSION__ === 'undefined' ? 'dev' : __WT_VERSION__
-const UPDATE_REPO = 'Aisland-SJL/dsh-worktable'
+const UPDATE_REPO = 'qiudl/dsh-worktable'
 const { command: UPGRADE_CMD, prompt: UPGRADE_AI, desktop: DESKTOP_HOST } = worktableUpgrade()
 // 更新提示图标（手绘 SVG，避免 emoji 跨平台渲染差异）
 const ICON_SYNC = (
@@ -136,6 +136,94 @@ type ProjectsState = {
 
 const PERSIST_KEY = 'dsh.worktable.view.v1'
 const PROJECTS_KEY = 'dsh.worktable.projects.v1'
+
+/* ── 云端状态（本机分支新增）───────────────────────────────────────────────
+ * 工作台原本只把项目/布局/绑定写进浏览器 localStorage，而 localStorage 以
+ * origin（含端口）为作用域：dsh web 每次启动换端口 → 换存储分区 → 项目卡片全丢。
+ *
+ * 这里把同一份状态额外落到宿主侧的一个文件里，并放进独立 git 仓库（由外部定时
+ * commit+push 到远端）。于是重启、换端口、清浏览器缓存、换机器都能恢复。
+ *
+ * 策略：仅当本地 localStorage 该键缺失（典型场景 = 换端口后的新 origin）时才用
+ *       云端兜底填充；本地已有内容时以本地为准，并把本地现状推上云端——绝不会用
+ *       一份较旧的云状态覆盖刚在本地做过的改动。
+ * 落盘复用插件已有的 /api/worktable/write 与 /api/worktable/file 路由。
+ * 落盘路径取本机配置：服务端只读路由 /api/worktable/local-paths 读 03_local/local.json
+ * （本机目录、不入库）→ 源码与打包产物里零个人绝对路径；换机器只改那个配置文件。
+ * ─────────────────────────────────────────────────────────────────────── */
+/** 云状态文件路径：mount 后由 loadCloudStatePath() 从本机配置注入。
+ *  null = 本机没配置 → 整块云同步停用（本地 localStorage 读写照常，只是不再落云端文件）。 */
+let cloudStatePath: string | null = null
+const CLOUD_SYNC_ENABLED = true
+const CLOUD_PUSH_DEBOUNCE_MS = 800
+
+/** 读本机配置里的云状态文件路径；路由不可用 / 未配置 / 字段为空一律 null（绝不阻断启动）。 */
+async function loadCloudStatePath(): Promise<string | null> {
+  try {
+    const r = await fetch('/api/worktable/local-paths', { cache: 'no-store' })
+    if (!r.ok) return null
+    const d = await r.json()
+    const p = typeof d?.cloudState === 'string' ? d.cloudState.trim() : ''
+    return p || null
+  } catch { return null }
+}
+
+/** 组件挂载后注册：取出当前完整状态。viewRef/projectsRef 每次渲染都重新赋值，
+ *  所以防抖到点时读到的就是最新状态（不会把半旧快照写上去）。 */
+let cloudStateGetter: null | (() => { view: unknown; projects: unknown }) = null
+let cloudPushTimer: ReturnType<typeof setTimeout> | null = null
+/** hydrate 是否已得出结论。**这一位是必须的**：挂载期间插件自己就会写 localStorage
+ *  （控制室自愈的 persistProjects），若此时允许推送，就会抢在 hydrate 读到云端之前
+ *  把「新 origin 的空状态」写上去、反而覆盖掉云端。
+ *  2026-10-04 真实踩过：重启那刻云端被判空（folders/layouts 全没）。 */
+let cloudHydrated = false
+
+/** 项目状态里是否真有「用户自己攒的东西」。
+ *  不能用「localStorage 键是否存在」判断本地为空——插件挂载时会自己写这个键
+ *  （控制室自愈），所以必须看内容。
+ *  views / lastUsed 由插件自动维护，不算用户内容的证据。 */
+function projectsPopulated(p: unknown): boolean {
+  if (!p || typeof p !== 'object') return false
+  const size = (v: unknown) => (Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v as object).length : 0))
+  const o = p as Record<string, unknown>
+  return size(o.order) + size(o.layouts) + size(o.folders) + size(o.bindings)
+    + size(o.shortcuts) + size(o.nameOverrides) + size(o.iconOverrides) + size(o.removed) > 0
+}
+
+/** 防抖推送完整状态到云端文件。始终写全量（view + projects），
+ *  否则只写变化的那一半会把文件里另一半抹掉。失败静默：不影响本地使用。 */
+function scheduleCloudPush(): void {
+  if (!CLOUD_SYNC_ENABLED || !cloudStatePath || !cloudStateGetter || !cloudHydrated) return
+  if (cloudPushTimer !== null) clearTimeout(cloudPushTimer)
+  cloudPushTimer = setTimeout(() => {
+    cloudPushTimer = null
+    try {
+      const get = cloudStateGetter
+      const path = cloudStatePath
+      if (!get || !path) return
+      const content = JSON.stringify({ ...get(), updatedAt: new Date().toISOString() }, null, 1)
+      void fetch('/api/worktable/write', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path, content }),
+      }).catch(() => { /* 云端写失败不影响本地使用 */ })
+    } catch { /* 同上 */ }
+  }, CLOUD_PUSH_DEBOUNCE_MS)
+}
+
+/** 读云端状态文件；未配置路径 / 不存在 / 取不到 / 不可解析一律返回 null（绝不阻断启动）。 */
+async function fetchCloudState(): Promise<{ view?: unknown; projects?: unknown } | null> {
+  const path = cloudStatePath
+  if (!CLOUD_SYNC_ENABLED || !path) return null
+  try {
+    const r = await fetch('/api/worktable/file?path=' + encodeURIComponent(path), { cache: 'no-store' })
+    if (!r.ok) return null
+    const raw = (await r.text()).trim()
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? (parsed as { view?: unknown; projects?: unknown }) : null
+  } catch { return null }
+}
 const MIN_TOP = 56
 const SNAP_PX = 32
 /** 插件市场外链（GitHub 仓库，已核实可访问；PRD 提及的 dshfind.com 未验证，不用死链）。 */
@@ -1407,6 +1495,7 @@ function WorktableSection(props: any) {
       try { localStorage.setItem(PERSIST_KEY, JSON.stringify({ ...next, sortMigratedV2: true })) } catch {}
       return next
     })
+    scheduleCloudPush()
   }
 
   const persistProjects = (patch: Partial<ProjectsState> | ((prev: ProjectsState) => ProjectsState)) => {
@@ -1415,7 +1504,60 @@ function WorktableSection(props: any) {
       try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(next)) } catch {}
       return next
     })
+    scheduleCloudPush()
   }
+
+  // 云端状态：读云端 → 判定「以本地为准还是以云端为准」→ 之后才开闸允许推送。
+  // 顺序很关键：判定完成前任何 persist 都不许推云端，否则会把新 origin 的空状态写上去。
+  useEffect(() => {
+    let cancelled = false
+    cloudStateGetter = () => ({ view: viewRef.current, projects: projectsRef.current?.projects ?? null })
+    void (async () => {
+      // 第 0 步：先取本机配置的落盘路径（在第一次读/写之前 await，cloudHydrated 仍为 false）。
+      // 本机没配置 → 整块云同步停用：不读云端、不开推送闸（localStorage 读写不受影响）。
+      cloudStatePath = await loadCloudStatePath()
+      if (cancelled) return
+      if (!cloudStatePath) {
+        try { if (typeof console !== 'undefined' && console.info) console.info('[dsh-worktable] 未配置本机云状态路径（03_local/local.json 的 cloudStatePath），云同步已停用；本地状态读写不受影响。') } catch {}
+        return
+      }
+      let cloud: { view?: unknown; projects?: unknown } | null = null
+      try { cloud = await fetchCloudState() } catch { cloud = null }
+      if (cancelled) return
+      const cloudView = cloud && cloud.view != null ? cloud.view : null
+      const cloudProjects = cloud && cloud.projects != null ? cloud.projects : null
+
+      // 本地现有内容：此刻 localStorage 可能已被挂载期的自愈写入，所以看内容而不是看键
+      let localProjects: unknown = null
+      try {
+        const raw = localStorage.getItem(PROJECTS_KEY)
+        localProjects = raw ? JSON.parse(raw) : null
+      } catch { localProjects = null }
+      const localViewRaw = localStorage.getItem(PERSIST_KEY)
+
+      let restored = false
+      // projects：云端有料、本地没料 → 用云端恢复（换 origin / 清缓存后的主路径）
+      if (cloudProjects !== null && projectsPopulated(cloudProjects) && !projectsPopulated(localProjects)) {
+        try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(cloudProjects)) } catch {}
+        restored = true
+      }
+      // view：本地没有这一项才用云端（本地有就不动，避免覆盖用户当前设置）
+      if (cloudView !== null && localViewRaw === null) {
+        try { localStorage.setItem(PERSIST_KEY, JSON.stringify(cloudView)) } catch {}
+        restored = true
+      }
+      if (cancelled) return
+      if (restored) {
+        // 交给既有的 load* 做一次同款校正，避免把未校验的数据直接塞进 state
+        setView(loadView())
+        setProjects(loadProjects())
+      }
+      // 判定结束 → 开闸，并把当前（可能刚恢复出来的）状态推上去
+      cloudHydrated = true
+      scheduleCloudPush()
+    })().finally(() => { cloudHydrated = true })
+    return () => { cancelled = true; cloudStateGetter = null }
+  }, [])
 
   // 自愈：启动时若控制室存档是坏布局（旧版关掉控制室标签造成窗格退化成选择器），立即重建默认面板
   useEffect(() => {
