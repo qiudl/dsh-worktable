@@ -1,6 +1,6 @@
 import { Context } from '@deepseek-ai/cordis'
 import { execFile } from 'node:child_process'
-import { readdirSync, realpathSync } from 'node:fs'
+import { readdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { dirname, resolve as pathResolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
@@ -147,6 +147,95 @@ function json(res: any, status: number, body: unknown) {
   res.end(JSON.stringify(body))
 }
 
+/* ── 路由鉴权 ─────────────────────────────────────────────────────────────
+ * 插件用 webServer.register 注册的是「裸」HTTP 路由，不经过 DSH 的 Typert 网关，
+ * 因此默认没有任何鉴权：本机任何进程、或浏览器里任意页面，都能以本机用户权限
+ * 调 /api/worktable/file|write|mkdir|fs（任意绝对路径，无白名单）——等于把
+ * 「任意文件读写」挂在无鉴权端点上。
+ *
+ * 修法：复用宿主 connection 服务**同一套**判定（持久 cookie + Host/Origin 围栏），
+ * 也就是 DSH 自己 /api/* 走的那一条。服务不可用时 fail-closed。
+ * ─────────────────────────────────────────────────────────────────────── */
+function authRejectCode(ctx: any, req: any): number | undefined {
+  let conn: any = null
+  try { conn = ctx.get?.('connection') ?? null } catch { conn = null }
+  if (!conn || typeof conn.requestRejection !== 'function') {
+    ctx.logger?.warn?.('[dsh-worktable] connection 服务不可用 → fail-closed（拒绝该请求）')
+    return 403
+  }
+  try { return conn.requestRejection(req) } catch { return 403 }
+}
+
+function denyRequest(res: any, code: number) {
+  res.writeHead(code, { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' })
+  res.end(code === 401
+    ? 'dsh web authentication required; reopen the URL printed by dsh web.\n'
+    : 'dsh-worktable: forbidden\n')
+}
+
+/** 包装一个路由 handler：先鉴权，再进业务。所有 HTTP 路由都必须经此注册。 */
+function guarded(ctx: any, handler: (req: any, res: any) => any) {
+  return (req: any, res: any) => {
+    const code = authRejectCode(ctx, req)
+    if (code !== undefined) { denyRequest(res, code); return }
+    return handler(req, res)
+  }
+}
+
+/* ── 路径策略 ─────────────────────────────────────────────────────────────
+ * 1) 敏感路径黑名单：读写都拒（凭据 / 私钥 / 钥匙串）。
+ * 2) 可写根白名单：客户端上报的项目文件夹（POST /api/worktable/roots），
+ *    持久化在 DSH_HOME；write / mkdir 必须落在某个根之内。
+ *    白名单为空（首次运行、客户端还没上报）时只查黑名单，避免把功能打死。
+ * ─────────────────────────────────────────────────────────────────────── */
+const SENSITIVE_SEGMENTS = ['.ssh', '.aws', '.gnupg', '.netrc', '.git-credentials', 'keychains', '.config/gh']
+let writableRoots: string[] = []
+
+function rootsFilePath(): string { return pathResolve(resolveDshHomeSafe(), 'worktable-roots.json') }
+
+function loadWritableRoots(): void {
+  try {
+    const d = JSON.parse(readFileSync(rootsFilePath(), 'utf8'))
+    if (Array.isArray(d?.folders)) {
+      writableRoots = d.folders.filter((x: unknown): x is string => typeof x === 'string' && x.length > 0)
+    }
+  } catch { /* 没有 / 坏了都当空 */ }
+}
+
+function saveWritableRoots(): void {
+  try { writeFileSync(rootsFilePath(), JSON.stringify({ folders: writableRoots }, null, 1)) } catch { /* 落盘失败不影响本次放行 */ }
+}
+
+/** 归一化后按路径段匹配敏感目录，避免 .. 与分隔符花样绕过 */
+function isSensitivePath(abs: string): boolean {
+  const p = abs.replace(/\\/g, '/')
+  return SENSITIVE_SEGMENTS.some((seg) => p.includes('/' + seg + '/') || p.endsWith('/' + seg))
+}
+
+/** 取「最近的存在祖先」做 realpath，消除符号链接造成的越界 */
+function realAncestor(abs: string): string {
+  let cur = abs
+  for (let i = 0; i < 64; i++) {
+    try { return realpathSync(cur) } catch { /* 不存在就往上一层 */ }
+    const up = pathResolve(cur, '..')
+    if (up === cur) return cur
+    cur = up
+  }
+  return abs
+}
+
+/** write / mkdir 的放行判定；返回字符串表示拒绝原因 */
+function writePathReject(abs: string): string | undefined {
+  if (isSensitivePath(abs)) return 'sensitive path'
+  if (writableRoots.length === 0) return undefined
+  const real = realAncestor(abs)
+  const inside = writableRoots.some((r) => {
+    const rr = realAncestor(pathResolve(r))
+    return real === rr || real.startsWith(rr.endsWith('/') ? rr : rr + '/')
+  })
+  return inside ? undefined : 'outside project folders'
+}
+
 async function readJsonBody(req: any): Promise<any> {
   const chunks: Buffer[] = []
   for await (const chunk of req) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
@@ -216,6 +305,16 @@ function setupTerminal(webServer: any, ctx: any) {
   ctx.effect(() => webServer.registerUpgrade({
     path: '/api/worktable/term',
     handler: (req: any, socket: any, head: any) => {
+      // WebSocket 升级同样必须先过鉴权（裸 upgrade 路由不受 Typert 网关保护）
+      const reject = authRejectCode(ctx, req)
+      if (reject !== undefined) {
+        try {
+          socket.write('HTTP/1.1 ' + reject + (reject === 401 ? ' Unauthorized' : ' Forbidden') +
+            '\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
+        } catch { /* socket 可能已断 */ }
+        try { socket.destroy() } catch { /* 同上 */ }
+        return
+      }
       wss.handleUpgrade(req, socket, head, (ws: any) => {
         const u = new URL(req.url ?? '/', 'http://dsh.internal')
         const cwd = serverCwd(ctx, u.searchParams.get('sessionId') || undefined, u.searchParams.get('cwd') || undefined)
@@ -287,7 +386,13 @@ export function apply(ctx: Context) {
     return
   }
 
-  webServer.register({
+  // 所有 HTTP 路由统一经 guarded() 鉴权后再注册（见文件顶部的 authRejectCode 注释）。
+  // 用 bind 保留原函数引用，避免下方 replace 后的 register 递归调用自己。
+  const registerRoute = webServer.register.bind(webServer)
+  const register = (route: any) => registerRoute({ ...route, handler: guarded(ctx, route.handler) })
+  loadWritableRoots()
+
+  register({
     kind: 'exact',
     path: HEALTH_PATH,
     handler: (_req: any, res: any) => {
@@ -295,8 +400,30 @@ export function apply(ctx: Context) {
     },
   })
 
+  // 客户端上报「当前项目的文件夹」→ 作为 write / mkdir 的可写根白名单。
+  // 本路由同样受鉴权保护：只有已登录的页面能设置，别的用户/页面改不了。
+  register({
+    kind: 'exact',
+    path: '/api/worktable/roots',
+    handler: async (req: any, res: any) => {
+      try {
+        if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+        const body = await readJsonBody(req)
+        const folders = Array.isArray(body?.folders)
+          ? body.folders.filter((x: unknown): x is string => typeof x === 'string' && x.length > 0)
+          : []
+        // 空列表不清空已有白名单（避免一次误报把保护关掉）
+        if (folders.length > 0) {
+          writableRoots = Array.from(new Set([...folders.map((f: string) => pathResolve(f)), ...writableRoots]))
+          saveWritableRoots()
+        }
+        json(res, 200, { ok: true, roots: writableRoots.length })
+      } catch (err) { json(res, 500, { error: String(err) }) }
+    },
+  })
+
   // 本地文件读取（资源管理器点击 .html 后浏览器标签内打开）
-  webServer.register({
+  register({
     kind: 'exact',
     path: '/api/worktable/file',
     handler: async (req: any, res: any) => {
@@ -305,6 +432,7 @@ export function apply(ctx: Context) {
         const p = u.searchParams.get('path') || ''
         if (!p) { json(res, 400, { error: 'missing path' }); return }
         const abs = pathResolve(p)
+        if (isSensitivePath(abs)) { json(res, 403, { error: 'sensitive path' }); return }
         const stat = await import('node:fs/promises').then((m) => m.stat(abs))
         if (stat.size > 20 * 1024 * 1024) { json(res, 413, { error: 'file too large' }); return }
         const data = await readFile(abs)
@@ -326,7 +454,7 @@ export function apply(ctx: Context) {
   // 本地站点（目录级静态托管）：点开 index.html 时挂载整个所在目录，
   // 让 ./assets/... 等相对引用正常解析（前缀路由，余下路径 = <rootToken>/<相对路径>）。
   // 原生皮肤模板：HTML 骨架 + 设计系统样式表（随插件分发，主题自动适配）
-  webServer.register({
+  register({
     kind: 'prefix',
     path: TEMPLATE_PREFIX,
     handler: (req: any, res: any) => {
@@ -347,7 +475,7 @@ export function apply(ctx: Context) {
     },
   })
 
-  webServer.register({
+  register({
     kind: 'prefix',
     path: SITE_PREFIX,
     handler: async (req: any, res: any) => {
@@ -361,6 +489,7 @@ export function apply(ctx: Context) {
         const root = pathResolve(rootToken)
         let abs = pathResolve(root, rel)
         if (abs !== root && !abs.startsWith(root + sep)) { json(res, 403, { error: 'outside root' }); return }
+        if (isSensitivePath(abs)) { json(res, 403, { error: 'sensitive path' }); return }
         const statMod = await import('node:fs/promises')
         let info = await statMod.stat(abs).catch(() => null)
         if (info && info.isDirectory()) {
@@ -379,7 +508,7 @@ export function apply(ctx: Context) {
     },
   })
 
-  webServer.register({
+  register({
     kind: 'exact',
     path: '/api/worktable/fs',
     handler: async (req: any, res: any) => {
@@ -388,7 +517,9 @@ export function apply(ctx: Context) {
         const path = typeof body.path === 'string' && body.path
           ? body.path
           : serverCwd(ctx, body.sessionId, body.cwd)
-        json(res, 200, await listDirectory(path))
+        const absFs = pathResolve(path)
+        if (isSensitivePath(absFs)) { json(res, 403, { path: '', entries: [], truncated: false, error: 'sensitive path' }); return }
+        json(res, 200, await listDirectory(absFs))
       } catch (err) {
         json(res, 500, { path: '', entries: [], truncated: false, error: String(err) })
       }
@@ -397,7 +528,7 @@ export function apply(ctx: Context) {
 
   // 本机路径配置（03_local/local.json）：只读下发云状态文件路径；
   // 未配置/读不到 → 200 { cloudState: null }，客户端据此整体停用云同步（本地状态不受影响）。
-  webServer.register({
+  register({
     kind: 'exact',
     path: '/api/worktable/local-paths',
     handler: async (_req: any, res: any) => {
@@ -409,7 +540,7 @@ export function apply(ctx: Context) {
   // 优先走宿主正式服务 ctx.workspaceRegistry（0.1.1/0.1.2 均有，正确感知 DSH_HOME 与存储后端）；
   // 不可用时回退按 resolveDshHomeSafe() 读 storages/workspace.json（只读）。
   // 返回结构是客户端契约，两种来源都映射成同一 shape。
-  webServer.register({
+  register({
     kind: 'exact',
     path: '/api/worktable/workspaces',
     handler: async (_req: any, res: any) => {
@@ -453,7 +584,7 @@ export function apply(ctx: Context) {
   })
 
   // 本地文件写入（MD 编辑模式保存回磁盘）
-  webServer.register({
+  register({
     kind: 'exact',
     path: '/api/worktable/write',
     handler: async (req: any, res: any) => {
@@ -465,6 +596,8 @@ export function apply(ctx: Context) {
         if (!p) { json(res, 400, { error: 'missing path' }); return }
         if (content.length > 20 * 1024 * 1024) { json(res, 413, { error: 'content too large' }); return }
         const abs = pathResolve(p)
+        const badWrite = writePathReject(abs)
+        if (badWrite) { json(res, 403, { error: badWrite }); return }
         await import('node:fs/promises').then((m) => m.writeFile(abs, content, 'utf8'))
         json(res, 200, { ok: true })
       } catch (err) {
@@ -474,7 +607,7 @@ export function apply(ctx: Context) {
   })
 
   // 新建分组：创建目录（仅当父目录已存在，避免递归误建深层垃圾目录）
-  webServer.register({
+  register({
     kind: 'exact',
     path: '/api/worktable/mkdir',
     handler: async (req: any, res: any) => {
@@ -484,6 +617,8 @@ export function apply(ctx: Context) {
         const p = typeof body.path === 'string' ? body.path.trim() : ''
         if (!p) { json(res, 400, { error: 'missing path' }); return }
         const abs = pathResolve(p)
+        const badMkdir = writePathReject(abs)
+        if (badMkdir) { json(res, 403, { error: badMkdir }); return }
         const fsx = await import('node:fs/promises')
         const parent = dirname(abs)
         try { await fsx.access(parent) } catch { json(res, 400, { error: 'parent not found' }); return }
@@ -495,7 +630,7 @@ export function apply(ctx: Context) {
     },
   })
 
-  webServer.register({
+  register({
     kind: 'exact',
     path: '/api/worktable/git',
     handler: async (req: any, res: any) => {

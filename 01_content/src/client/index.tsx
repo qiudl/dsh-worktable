@@ -1559,6 +1559,20 @@ function WorktableSection(props: any) {
     return () => { cancelled = true; cloudStateGetter = null }
   }, [])
 
+  // 把当前项目的文件夹上报给宿主服务端 → 作为 write/mkdir 的可写根白名单。
+  // 服务端对 /api/worktable/* 已全量鉴权（cookie），这条只是收窄「写哪儿」。
+  const foldersKey = Object.values(projects.folders ?? {}).join('|')
+  useEffect(() => {
+    const folders = Object.values(projects.folders ?? {})
+      .filter((x): x is string => typeof x === 'string' && x.length > 0)
+    if (!folders.length) return
+    void fetch('/api/worktable/roots', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ folders }),
+    }).catch(() => { /* 上报失败：服务端保留上一次白名单 */ })
+  }, [foldersKey])
+
   // 自愈：启动时若控制室存档是坏布局（旧版关掉控制室标签造成窗格退化成选择器），立即重建默认面板
   useEffect(() => {
     const saved = projects.views[CONSOLE_ID]

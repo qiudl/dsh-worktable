@@ -1,6 +1,6 @@
 // src/index.ts
 import { execFile } from "node:child_process";
-import { readdirSync, realpathSync } from "node:fs";
+import { readdirSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, resolve as pathResolve, sep } from "node:path";
 import { createRequire } from "node:module";
@@ -115,7 +115,7 @@ function resolveDshHomeSafe() {
   cachedDshHome = baseDshHome();
   return cachedDshHome;
 }
-var PLUGIN_VERSION = false ? "dev" : "0.4.1";
+var PLUGIN_VERSION = false ? "dev" : "0.4.2";
 var name = "dsh-worktable";
 var inject = ["webServer", "sessions"];
 var HEALTH_PATH = "/api/worktable/health";
@@ -210,6 +210,84 @@ function json(res, status, body) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(body));
 }
+function authRejectCode(ctx, req) {
+  let conn = null;
+  try {
+    conn = ctx.get?.("connection") ?? null;
+  } catch {
+    conn = null;
+  }
+  if (!conn || typeof conn.requestRejection !== "function") {
+    ctx.logger?.warn?.("[dsh-worktable] connection \u670D\u52A1\u4E0D\u53EF\u7528 \u2192 fail-closed\uFF08\u62D2\u7EDD\u8BE5\u8BF7\u6C42\uFF09");
+    return 403;
+  }
+  try {
+    return conn.requestRejection(req);
+  } catch {
+    return 403;
+  }
+}
+function denyRequest(res, code) {
+  res.writeHead(code, { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" });
+  res.end(code === 401 ? "dsh web authentication required; reopen the URL printed by dsh web.\n" : "dsh-worktable: forbidden\n");
+}
+function guarded(ctx, handler) {
+  return (req, res) => {
+    const code = authRejectCode(ctx, req);
+    if (code !== void 0) {
+      denyRequest(res, code);
+      return;
+    }
+    return handler(req, res);
+  };
+}
+var SENSITIVE_SEGMENTS = [".ssh", ".aws", ".gnupg", ".netrc", ".git-credentials", "keychains", ".config/gh"];
+var writableRoots = [];
+function rootsFilePath() {
+  return pathResolve(resolveDshHomeSafe(), "worktable-roots.json");
+}
+function loadWritableRoots() {
+  try {
+    const d = JSON.parse(readFileSync(rootsFilePath(), "utf8"));
+    if (Array.isArray(d?.folders)) {
+      writableRoots = d.folders.filter((x) => typeof x === "string" && x.length > 0);
+    }
+  } catch {
+  }
+}
+function saveWritableRoots() {
+  try {
+    writeFileSync(rootsFilePath(), JSON.stringify({ folders: writableRoots }, null, 1));
+  } catch {
+  }
+}
+function isSensitivePath(abs) {
+  const p = abs.replace(/\\/g, "/");
+  return SENSITIVE_SEGMENTS.some((seg) => p.includes("/" + seg + "/") || p.endsWith("/" + seg));
+}
+function realAncestor(abs) {
+  let cur = abs;
+  for (let i = 0; i < 64; i++) {
+    try {
+      return realpathSync(cur);
+    } catch {
+    }
+    const up = pathResolve(cur, "..");
+    if (up === cur) return cur;
+    cur = up;
+  }
+  return abs;
+}
+function writePathReject(abs) {
+  if (isSensitivePath(abs)) return "sensitive path";
+  if (writableRoots.length === 0) return void 0;
+  const real = realAncestor(abs);
+  const inside = writableRoots.some((r) => {
+    const rr = realAncestor(pathResolve(r));
+    return real === rr || real.startsWith(rr.endsWith("/") ? rr : rr + "/");
+  });
+  return inside ? void 0 : "outside project folders";
+}
 async function readJsonBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
@@ -267,6 +345,18 @@ function setupTerminal(webServer, ctx) {
   ctx.effect(() => webServer.registerUpgrade({
     path: "/api/worktable/term",
     handler: (req, socket, head) => {
+      const reject = authRejectCode(ctx, req);
+      if (reject !== void 0) {
+        try {
+          socket.write("HTTP/1.1 " + reject + (reject === 401 ? " Unauthorized" : " Forbidden") + "\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        } catch {
+        }
+        try {
+          socket.destroy();
+        } catch {
+        }
+        return;
+      }
       wss.handleUpgrade(req, socket, head, (ws) => {
         const u = new URL(req.url ?? "/", "http://dsh.internal");
         const cwd = serverCwd(ctx, u.searchParams.get("sessionId") || void 0, u.searchParams.get("cwd") || void 0);
@@ -353,14 +443,39 @@ function apply(ctx) {
     ctx.logger?.warn("[dsh-worktable] ctx.webServer \u4E0D\u53EF\u7528\uFF08headless profile\uFF1F\uFF09\uFF0C\u8DF3\u8FC7\u670D\u52A1\u7AEF\u8DEF\u7531");
     return;
   }
-  webServer.register({
+  const registerRoute = webServer.register.bind(webServer);
+  const register = (route) => registerRoute({ ...route, handler: guarded(ctx, route.handler) });
+  loadWritableRoots();
+  register({
     kind: "exact",
     path: HEALTH_PATH,
     handler: (_req, res) => {
       json(res, 200, { plugin: "dsh-worktable", version: PLUGIN_VERSION, ok: true });
     }
   });
-  webServer.register({
+  register({
+    kind: "exact",
+    path: "/api/worktable/roots",
+    handler: async (req, res) => {
+      try {
+        if (req.method !== "POST") {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        const body = await readJsonBody(req);
+        const folders = Array.isArray(body?.folders) ? body.folders.filter((x) => typeof x === "string" && x.length > 0) : [];
+        if (folders.length > 0) {
+          writableRoots = Array.from(/* @__PURE__ */ new Set([...folders.map((f) => pathResolve(f)), ...writableRoots]));
+          saveWritableRoots();
+        }
+        json(res, 200, { ok: true, roots: writableRoots.length });
+      } catch (err) {
+        json(res, 500, { error: String(err) });
+      }
+    }
+  });
+  register({
     kind: "exact",
     path: "/api/worktable/file",
     handler: async (req, res) => {
@@ -372,6 +487,10 @@ function apply(ctx) {
           return;
         }
         const abs = pathResolve(p);
+        if (isSensitivePath(abs)) {
+          json(res, 403, { error: "sensitive path" });
+          return;
+        }
         const stat = await import("node:fs/promises").then((m) => m.stat(abs));
         if (stat.size > 20 * 1024 * 1024) {
           json(res, 413, { error: "file too large" });
@@ -407,7 +526,7 @@ function apply(ctx) {
       }
     }
   });
-  webServer.register({
+  register({
     kind: "prefix",
     path: TEMPLATE_PREFIX,
     handler: (req, res) => {
@@ -432,7 +551,7 @@ function apply(ctx) {
       }
     }
   });
-  webServer.register({
+  register({
     kind: "prefix",
     path: SITE_PREFIX,
     handler: async (req, res) => {
@@ -462,6 +581,10 @@ function apply(ctx) {
           json(res, 403, { error: "outside root" });
           return;
         }
+        if (isSensitivePath(abs)) {
+          json(res, 403, { error: "sensitive path" });
+          return;
+        }
         const statMod = await import("node:fs/promises");
         let info = await statMod.stat(abs).catch(() => null);
         if (info && info.isDirectory()) {
@@ -485,27 +608,32 @@ function apply(ctx) {
       }
     }
   });
-  webServer.register({
+  register({
     kind: "exact",
     path: "/api/worktable/fs",
     handler: async (req, res) => {
       try {
         const body = await readJsonBody(req);
         const path = typeof body.path === "string" && body.path ? body.path : serverCwd(ctx, body.sessionId, body.cwd);
-        json(res, 200, await listDirectory(path));
+        const absFs = pathResolve(path);
+        if (isSensitivePath(absFs)) {
+          json(res, 403, { path: "", entries: [], truncated: false, error: "sensitive path" });
+          return;
+        }
+        json(res, 200, await listDirectory(absFs));
       } catch (err) {
         json(res, 500, { path: "", entries: [], truncated: false, error: String(err) });
       }
     }
   });
-  webServer.register({
+  register({
     kind: "exact",
     path: "/api/worktable/local-paths",
     handler: async (_req, res) => {
       json(res, 200, { cloudState: await readLocalConfigField("local.json", "cloudStatePath") });
     }
   });
-  webServer.register({
+  register({
     kind: "exact",
     path: "/api/worktable/workspaces",
     handler: async (_req, res) => {
@@ -554,7 +682,7 @@ function apply(ctx) {
       }
     }
   });
-  webServer.register({
+  register({
     kind: "exact",
     path: "/api/worktable/write",
     handler: async (req, res) => {
@@ -576,6 +704,11 @@ function apply(ctx) {
           return;
         }
         const abs = pathResolve(p);
+        const badWrite = writePathReject(abs);
+        if (badWrite) {
+          json(res, 403, { error: badWrite });
+          return;
+        }
         await import("node:fs/promises").then((m) => m.writeFile(abs, content, "utf8"));
         json(res, 200, { ok: true });
       } catch (err) {
@@ -583,7 +716,7 @@ function apply(ctx) {
       }
     }
   });
-  webServer.register({
+  register({
     kind: "exact",
     path: "/api/worktable/mkdir",
     handler: async (req, res) => {
@@ -600,6 +733,11 @@ function apply(ctx) {
           return;
         }
         const abs = pathResolve(p);
+        const badMkdir = writePathReject(abs);
+        if (badMkdir) {
+          json(res, 403, { error: badMkdir });
+          return;
+        }
         const fsx = await import("node:fs/promises");
         const parent = dirname(abs);
         try {
@@ -615,7 +753,7 @@ function apply(ctx) {
       }
     }
   });
-  webServer.register({
+  register({
     kind: "exact",
     path: "/api/worktable/git",
     handler: async (req, res) => {

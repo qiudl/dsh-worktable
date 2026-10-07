@@ -90,7 +90,8 @@ function runChild(envHome, name, withOfficial = false) {
       "import { homedir } from 'node:os'",
       "const mod = await import(pathToFileURL(process.argv[1]).href)",
       "const routes = []",
-      "const fakeCtx = { webServer: { register: (r) => { routes.push(r) } }, effect: () => {}, logger: { warn() {}, info() {} } }",
+      "const connection = { requestRejection: () => undefined }",
+        "const fakeCtx = { webServer: { register: (r) => { routes.push(r) } }, get: (n) => (n === 'connection' ? connection : undefined), effect: () => {}, logger: { warn() {}, info() {} } }",
       "mod.apply(fakeCtx)",
       "const route = routes.find((r) => r.path === '/api/worktable/workspaces')",
       "let status = 0; let body = ''",
@@ -162,7 +163,8 @@ function runChild(envHome, name, withOfficial = false) {
         "import { pathToFileURL } from 'node:url'",
         "const mod = await import(pathToFileURL(process.argv[1]).href)",
         "const routes = []",
-        "const fakeCtx = { webServer: { register: (r) => { routes.push(r) } }, effect: () => {}, logger: { warn() {}, info() {} } }",
+        "const connection = { requestRejection: () => undefined }",
+        "const fakeCtx = { webServer: { register: (r) => { routes.push(r) } }, get: (n) => (n === 'connection' ? connection : undefined), effect: () => {}, logger: { warn() {}, info() {} } }",
         "mod.apply(fakeCtx)",
         "const route = routes.find((r) => r.path === '/api/worktable/workspaces')",
         "let status = 0; let body = ''",
@@ -221,6 +223,50 @@ function runChild(envHome, name, withOfficial = false) {
     if (out.fullMatch !== true) fail(label, 'error missing FULL path: expected ' + out.expectedFull + ' body=' + out.body.slice(0, 200))
   }
   if (!failures.some((f) => /^[DEF]\./.test(f))) ok('D+E+F. ~ 与 ~/ 与 ~\\ 前缀展开 + 相对路径按 cwd 解析（完整绝对路径断言）')
+}
+
+// —— G. 鉴权门禁：宿主 connection 拒绝时，数据路由必须 401（安全契约回归） ——
+{
+  const isoDir = mkdtempSync(join(tmpdir(), 'wt-auth-iso-'))
+  try {
+    mkdirSync(join(isoDir, 'lib'), { recursive: true })
+    copyFileSync(BUNDLE_SRC, join(isoDir, 'lib', 'index.js'))
+    const script = [
+      "import { pathToFileURL } from 'node:url'",
+      "const mod = await import(pathToFileURL(process.argv[1]).href)",
+      "const routes = []",
+      "const connection = { requestRejection: () => 401 }",
+      "const fakeCtx = { webServer: { register: (r) => { routes.push(r) } }, get: (n) => (n === 'connection' ? connection : undefined), effect: () => {}, logger: { warn() {}, info() {} } }",
+      "mod.apply(fakeCtx)",
+      "const out = {}",
+      "for (const p of ['/api/worktable/health', '/api/worktable/workspaces', '/api/worktable/file', '/api/worktable/write']) {",
+      "  const route = routes.find((r) => r.path === p)",
+      "  if (!route) { out[p] = 'missing'; continue }",
+      "  let status = 0",
+      "  const res = { writeHead(s) { status = s }, end() {} }",
+      "  await route.handler({ url: p, headers: {} }, res)",
+      "  out[p] = status",
+      "}",
+      "console.log(JSON.stringify(out))",
+    ].join('\n')
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', script, join(isoDir, 'lib', 'index.js')], {
+      encoding: 'utf8',
+      timeout: 15000,
+    })
+    if (r.error || r.status !== 0) {
+      fail('G.鉴权', 'spawn: ' + (r.error ? r.error.message : 'exit=' + r.status + ' ' + (r.stderr || '').slice(0, 200)))
+    } else {
+      let o = null
+      try { o = JSON.parse(r.stdout.trim().split('\n').pop()) } catch {}
+      if (!o) fail('G.鉴权', 'unparseable: ' + r.stdout.slice(0, 200))
+      else for (const [p, st] of Object.entries(o)) {
+        if (st !== 401) fail('G.鉴权', p + ' expect 401, got ' + st)
+      }
+    }
+  } finally {
+    rmSync(isoDir, { recursive: true, force: true })
+  }
+  if (!failures.some((f) => f.startsWith('G.'))) ok('G. 鉴权门禁：connection 拒绝时所有数据路由返回 401')
 }
 
 console.log('all server-home tests passed: ' + pass + ' scenarios, ' + failures.length + ' failures')

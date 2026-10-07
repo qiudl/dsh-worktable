@@ -207,7 +207,7 @@ if (serverRun.status !== 0) {
   console.error(serverRun.stderr || serverRun.stdout)
   process.exit(1)
 }
-console.log('[release-prep] server home resolution tests passed (3 scenarios, on installed artifact)')
+console.log('[release-prep] server home resolution tests passed (4 scenarios, on installed artifact)')
 
 // ---------- 6. 双资产从同一已验证包复制 + SHA-256 ----------
 const outDir = join(HERE, 'dist', 'v' + VERSION)
