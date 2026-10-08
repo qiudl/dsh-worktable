@@ -1,7 +1,7 @@
 // src/index.ts
 import { execFile } from "node:child_process";
 import { readdirSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve as pathResolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -240,6 +240,161 @@ function guarded(ctx, handler) {
     }
     return handler(req, res);
   };
+}
+function parseLegacyMatch(name2) {
+  return typeof name2 === "string" && name2.includes("dsh-client-ui-voice");
+}
+function textMentionsLegacy(text) {
+  return typeof text === "string" && text.includes("dsh-client-ui-voice");
+}
+function detectLegacyLoaded(entries) {
+  try {
+    for (const entry of entries) if (parseLegacyMatch(entry?.options?.name)) return true;
+  } catch {
+  }
+  return false;
+}
+var VOICE_CHECK_FIELDS = ["time", "patchHasLegacy", "catalogHasLegacy", "legacyLoaded", "catalogChecked", "conclusion"];
+var VOICE_CHECK_CONCLUSIONS = ["legacy-loaded", "legacy-present", "clean", "catalog-unchecked"];
+function buildCheckPayload(input) {
+  const patchHasLegacy = input.patchHasLegacy === true;
+  const catalogHasLegacy = input.catalogHasLegacy === true;
+  const legacyLoaded = input.legacyLoaded === true;
+  const catalogChecked = input.catalogChecked === true;
+  const conclusion = legacyLoaded ? "legacy-loaded" : patchHasLegacy || catalogHasLegacy ? "legacy-present" : catalogChecked ? "clean" : "catalog-unchecked";
+  return {
+    time: typeof input.time === "string" && input.time ? input.time : (/* @__PURE__ */ new Date()).toISOString(),
+    patchHasLegacy,
+    catalogHasLegacy,
+    legacyLoaded,
+    catalogChecked,
+    conclusion
+  };
+}
+function pickVoiceCheckFields(doc) {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
+  return buildCheckPayload({
+    time: typeof doc.time === "string" ? doc.time : "",
+    patchHasLegacy: doc.patchHasLegacy,
+    catalogHasLegacy: doc.catalogHasLegacy,
+    legacyLoaded: doc.legacyLoaded,
+    catalogChecked: doc.catalogChecked
+  });
+}
+var LEGACY_VOICE_WARNING = "[dsh-worktable] \u26A0\uFE0F \u68C0\u6D4B\u5230\u65E7\u8BED\u97F3\u63D2\u4EF6 @deepseek-ai/dsh-client-ui-voice \u7684\u56DE\u6D41\u4FE1\u53F7\uFF1A\u2460 \u88C5\u56DE\u4F1A\u4E0E\u672C\u5730\u6865 /api/voice/asr \u9759\u9ED8\u906E\u853D\uFF08exact \u4F18\u5148\u4E8E /api \u524D\u7F00\uFF0C\u7528\u6237\u65E0\u611F\u77E5\uFF09\uFF1B\u2461 \u5B83\u7684 ASR/TTS \u8D70\u4E91\uFF08\u8C46\u5305 ASR volc.bigasr.auc_turbo + \u8C46\u5305 TTS + ark\uFF09\u2192 \u9759\u9ED8\u8BA1\u8D39\uFF1B\u2462 \u4E3B\u8DEF\u5F84\uFF08\u8F93\u5165\u6846\u9EA6\u514B\u98CE + \u5DE5\u4F5C\u53F0\uFF09\u5DF2\u8986\u76D6\u9700\u6C42\uFF0C\u52FF\u88C5\u56DE\u3002";
+function catalogCandidates(env, execPath) {
+  const out = [];
+  const root = typeof env?.DSH_HOST_BUNDLED_PLUGINS_ROOT === "string" ? env.DSH_HOST_BUNDLED_PLUGINS_ROOT.trim() : "";
+  if (root) out.push(pathResolve(root, "catalog.v1.json"));
+  if (typeof execPath === "string" && execPath) out.push(pathResolve(dirname(execPath), "..", "dsh-default-plugins", "catalog.v1.json"));
+  out.push("/Applications/Slark.app/Contents/Resources/dsh-default-plugins/catalog.v1.json");
+  return Array.from(new Set(out));
+}
+function firstReadable(candidates, read) {
+  for (const file of candidates) {
+    try {
+      return read(file);
+    } catch {
+    }
+  }
+  return null;
+}
+function parseVoiceConfig(raw) {
+  try {
+    const doc = typeof raw === "string" ? JSON.parse(raw) : null;
+    if (doc && typeof doc === "object" && typeof doc.voiceAsrEnabled === "boolean") {
+      return { voiceAsrEnabled: doc.voiceAsrEnabled };
+    }
+  } catch {
+  }
+  return { voiceAsrEnabled: true };
+}
+function loadVoiceConfig() {
+  try {
+    const file = pathResolve(resolveDshHomeSafe(), "worktable-voice.json");
+    return { ...parseVoiceConfig(readFileSync(file, "utf8")), exists: true };
+  } catch {
+    return { voiceAsrEnabled: true, exists: false };
+  }
+}
+function normalizeDraftTake(value) {
+  return Math.max(0, Math.min(1e3, Math.floor(Number(value) || 0)));
+}
+function voiceCheckLogPath() {
+  return pathResolve(resolveDshHomeSafe(), "logs", "dsh-worktable-check.json");
+}
+function currentProfileName() {
+  const p = process.env.DSH_PROFILE;
+  return typeof p === "string" && p.trim() ? p.trim() : "web";
+}
+function patchCandidates(env, home, profile) {
+  const explicit = typeof env?.DSH_PROFILE_DIR === "string" ? env.DSH_PROFILE_DIR.trim() : "";
+  const out = [];
+  if (explicit) out.push(pathResolve(explicit, "cordis.patch.yml"));
+  out.push(pathResolve(home, "profiles", profile, "cordis.patch.yml"));
+  return Array.from(new Set(out));
+}
+var lastVoiceCheckPayload = null;
+function collectVoiceCheck(ctx, time) {
+  const read = (p) => readFileSync(p, "utf8");
+  let catalogText = null;
+  let patchText = null;
+  try {
+    catalogText = firstReadable(catalogCandidates(process.env, process.execPath), read);
+  } catch {
+    catalogText = null;
+  }
+  try {
+    patchText = firstReadable(patchCandidates(process.env, resolveDshHomeSafe(), currentProfileName()), read);
+  } catch {
+    patchText = null;
+  }
+  let loaded = false;
+  try {
+    const loader = ctx?.get?.("loader") ?? null;
+    if (loader && typeof loader.entries === "function") loaded = detectLegacyLoaded(loader.entries());
+  } catch {
+    loaded = false;
+  }
+  return buildCheckPayload({
+    time,
+    patchHasLegacy: textMentionsLegacy(patchText),
+    catalogHasLegacy: textMentionsLegacy(catalogText),
+    catalogChecked: typeof catalogText === "string",
+    // 目录/文件不存在 → false（静默降级）
+    legacyLoaded: loaded
+  });
+}
+function scheduleVoiceCheck(ctx) {
+  const time = (/* @__PURE__ */ new Date()).toISOString();
+  let warned = false;
+  const run = () => {
+    void (async () => {
+      try {
+        const payload = collectVoiceCheck(ctx, time);
+        lastVoiceCheckPayload = payload;
+        try {
+          const file = voiceCheckLogPath();
+          await mkdir(dirname(file), { recursive: true });
+          await writeFile(file, JSON.stringify(payload, null, 2) + "\n", "utf8");
+        } catch {
+        }
+        if (!warned && (payload.legacyLoaded || payload.catalogHasLegacy || payload.patchHasLegacy)) {
+          warned = true;
+          try {
+            ctx.logger?.warn?.(LEGACY_VOICE_WARNING);
+          } catch {
+          }
+        }
+      } catch {
+      }
+    })();
+  };
+  try {
+    setTimeout(run, 0);
+    setTimeout(run, 1500);
+  } catch {
+  }
 }
 var SENSITIVE_SEGMENTS = [".ssh", ".aws", ".gnupg", ".netrc", ".git-credentials", "keychains", ".config/gh"];
 var writableRoots = [];
@@ -659,8 +814,9 @@ function apply(ctx) {
           const body = await readJsonBody(req);
           const delta = body && typeof body.corrected === "object" && body.corrected ? body.corrected : null;
           const learn = body && body.learn && typeof body.learn === "object" ? body.learn : null;
-          if (!delta && !learn) {
-            json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} \u6216 {learn:{wrong,right}}' });
+          const draftTake = normalizeDraftTake(body && body.draftTake);
+          if (!delta && !learn && !draftTake) {
+            json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} \u3001 {learn:{wrong,right}} \u6216 {draftTake:1}' });
             return;
           }
           let doc = null;
@@ -672,9 +828,12 @@ function apply(ctx) {
             json(res, 404, { error: "user memory file missing or unreadable" });
             return;
           }
+          doc.stats = doc.stats && typeof doc.stats === "object" ? doc.stats : {};
+          if (draftTake) {
+            doc.stats.draftTakes = Math.floor(Number(doc.stats.draftTakes) || 0) + draftTake;
+          }
           let added = 0;
           if (delta) {
-            doc.stats = doc.stats && typeof doc.stats === "object" ? doc.stats : {};
             doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === "object" ? doc.stats.corrected : {};
             for (const [k, v] of Object.entries(delta)) {
               const n = Math.max(0, Math.min(1e3, Math.floor(Number(v) || 0)));
@@ -717,7 +876,13 @@ function apply(ctx) {
           doc.savedAt = Date.now();
           const fsx = await import("node:fs/promises");
           await fsx.writeFile(file, JSON.stringify(doc, null, 2) + "\n", { encoding: "utf8", mode: 384 });
-          json(res, 200, { ok: true, added, corrected: doc.stats && doc.stats.corrected || {}, learned });
+          json(res, 200, {
+            ok: true,
+            added,
+            corrected: doc.stats && doc.stats.corrected || {},
+            draftTakes: Math.floor(Number(doc.stats && doc.stats.draftTakes) || 0),
+            learned
+          });
           return;
         }
         res.writeHead(405);
@@ -727,6 +892,28 @@ function apply(ctx) {
       }
     }
   });
+  register({
+    kind: "exact",
+    path: "/api/worktable/legacy-voice-check",
+    handler: async (_req, res) => {
+      try {
+        const raw = await readFile(voiceCheckLogPath(), "utf8");
+        const picked = pickVoiceCheckFields(JSON.parse(raw));
+        json(res, 200, picked ? { exists: true, ...picked } : { exists: false });
+      } catch {
+        json(res, 200, lastVoiceCheckPayload ? { exists: true, ...lastVoiceCheckPayload } : { exists: false });
+      }
+    }
+  });
+  const voiceConfig = loadVoiceConfig();
+  register({
+    kind: "exact",
+    path: "/api/worktable/voice-config",
+    handler: (_req, res) => {
+      json(res, 200, { voiceAsrEnabled: voiceConfig.voiceAsrEnabled, exists: voiceConfig.exists });
+    }
+  });
+  scheduleVoiceCheck(ctx);
   register({
     kind: "exact",
     path: "/api/worktable/now",
@@ -886,8 +1073,21 @@ function apply(ctx) {
 }
 export {
   HEALTH_PATH,
+  LEGACY_VOICE_WARNING,
+  VOICE_CHECK_CONCLUSIONS,
+  VOICE_CHECK_FIELDS,
   __wtLoadProbeStats,
   apply,
+  buildCheckPayload,
+  catalogCandidates,
+  detectLegacyLoaded,
+  firstReadable,
   inject,
-  name
+  name,
+  normalizeDraftTake,
+  parseLegacyMatch,
+  parseVoiceConfig,
+  patchCandidates,
+  pickVoiceCheckFields,
+  textMentionsLegacy
 };

@@ -1,7 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { execFile } from 'node:child_process'
 import { readdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve as pathResolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
@@ -180,6 +180,210 @@ function guarded(ctx: any, handler: (req: any, res: any) => any) {
     if (code !== undefined) { denyRequest(res, code); return }
     return handler(req, res)
   }
+}
+
+/* ── 旧语音插件的回流检测（REQ-20261008-0010 · F3，P0）────────────────────
+ * 旧插件 `@deepseek-ai/dsh-client-ui-voice` 有两条回流通道：
+ *   ① 盘上 `node_modules/@deepseek-ai/dsh-client-ui-voice.before-REQ-20260918-00{12,13}`；
+ *   ② Slark 自带 `dsh-default-plugins/catalog.v1.json`（`entryIds:["ui-voice"]`）→ 可一键装回。
+ * 它走 `ctx.connection.fetch.register`（另一张表），不与本地桥的 webServer exact 冲突 →
+ * 后果**不是**"启动故障"，而是「与本地桥静默遮蔽（exact 优先于 /api 前缀）+ 静默云计费」。
+ *
+ * 本段只做「检测 + 提示」：不改 Slark 应用包、不读/不写任何凭据，
+ * 产物字段白名单恰好 6 个（只布尔/字符串枚举），异常一律不外抛原文。
+ * ─────────────────────────────────────────────────────────────────────── */
+
+/** 匹配规则：只看 `entry.options.name` 是否包含该包名。
+ *  ⚠️ 禁止用 id 前缀匹配：官方 bundle 的 entry id 是 `ui-voice-input`（`ui-voice` 前缀会误报），
+ *  而它的 entry name 是 `@deepseek-ai/dsh-experimental-client-ui-voice-input`（不含本子串 → 不误报）。 */
+export function parseLegacyMatch(name: unknown): boolean {
+  return typeof name === 'string' && name.includes('dsh-client-ui-voice')
+}
+
+/** 文本里是否出现该包名（只回布尔，**绝不把文本带出去**） */
+export function textMentionsLegacy(text: unknown): boolean {
+  return typeof text === 'string' && text.includes('dsh-client-ui-voice')
+}
+
+/** 枚举 loader entries（取 `entry.options.name`）判断旧插件是否已加载；枚举异常一律视为未命中 */
+export function detectLegacyLoaded(entries: Iterable<any>): boolean {
+  try {
+    for (const entry of entries) if (parseLegacyMatch(entry?.options?.name)) return true
+  } catch { /* 枚举失败 → 未命中（不外抛） */ }
+  return false
+}
+
+/** 自检产物（字段白名单恰好这 6 个；只允许布尔/字符串枚举） */
+export type VoiceCheckPayload = {
+  time: string
+  patchHasLegacy: boolean
+  catalogHasLegacy: boolean
+  legacyLoaded: boolean
+  catalogChecked: boolean
+  conclusion: string
+}
+
+/** 产物字段名白名单（测试与复核用；顺序即产物字段顺序） */
+export const VOICE_CHECK_FIELDS = ['time', 'patchHasLegacy', 'catalogHasLegacy', 'legacyLoaded', 'catalogChecked', 'conclusion'] as const
+
+/** conclusion 枚举（异常只体现为 catalogChecked:false，不把错误原文写进产物） */
+export const VOICE_CHECK_CONCLUSIONS = ['legacy-loaded', 'legacy-present', 'clean', 'catalog-unchecked'] as const
+
+/** 只按入参构造产物：不读文件、不带原文；缺省/非布尔一律按 false（异常不外抛） */
+export function buildCheckPayload(input: {
+  time?: unknown
+  patchHasLegacy?: unknown
+  catalogHasLegacy?: unknown
+  legacyLoaded?: unknown
+  catalogChecked?: unknown
+}): VoiceCheckPayload {
+  const patchHasLegacy = input.patchHasLegacy === true
+  const catalogHasLegacy = input.catalogHasLegacy === true
+  const legacyLoaded = input.legacyLoaded === true
+  const catalogChecked = input.catalogChecked === true
+  const conclusion = legacyLoaded ? 'legacy-loaded'
+    : (patchHasLegacy || catalogHasLegacy) ? 'legacy-present'
+      : catalogChecked ? 'clean' : 'catalog-unchecked'
+  return {
+    time: typeof input.time === 'string' && input.time ? input.time : new Date().toISOString(),
+    patchHasLegacy,
+    catalogHasLegacy,
+    legacyLoaded,
+    catalogChecked,
+    conclusion,
+  }
+}
+
+/** 只透出白名单字段（防产物被外部篡改后把任意内容回显给页面） */
+export function pickVoiceCheckFields(doc: any): VoiceCheckPayload | null {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null
+  return buildCheckPayload({
+    time: typeof doc.time === 'string' ? doc.time : '',
+    patchHasLegacy: doc.patchHasLegacy,
+    catalogHasLegacy: doc.catalogHasLegacy,
+    legacyLoaded: doc.legacyLoaded,
+    catalogChecked: doc.catalogChecked,
+  })
+}
+
+/** 命中（已加载 / 可一键装回 / profile 配置里出现）时的告警：三点必须齐全 */
+export const LEGACY_VOICE_WARNING =
+  '[dsh-worktable] ⚠️ 检测到旧语音插件 @deepseek-ai/dsh-client-ui-voice 的回流信号：' +
+  '① 装回会与本地桥 /api/voice/asr 静默遮蔽（exact 优先于 /api 前缀，用户无感知）；' +
+  '② 它的 ASR/TTS 走云（豆包 ASR volc.bigasr.auc_turbo + 豆包 TTS + ark）→ 静默计费；' +
+  '③ 主路径（输入框麦克风 + 工作台）已覆盖需求，勿装回。'
+
+/** catalog 候选路径：env `DSH_HOST_BUNDLED_PLUGINS_ROOT` → 宿主可执行文件相邻 → Slark 硬编码兜底 */
+export function catalogCandidates(env: Record<string, string | undefined>, execPath: string): string[] {
+  const out: string[] = []
+  const root = typeof env?.DSH_HOST_BUNDLED_PLUGINS_ROOT === 'string' ? env.DSH_HOST_BUNDLED_PLUGINS_ROOT.trim() : ''
+  if (root) out.push(pathResolve(root, 'catalog.v1.json'))
+  if (typeof execPath === 'string' && execPath) out.push(pathResolve(dirname(execPath), '..', 'dsh-default-plugins', 'catalog.v1.json'))
+  out.push('/Applications/Slark.app/Contents/Resources/dsh-default-plugins/catalog.v1.json')
+  return Array.from(new Set(out))
+}
+
+/** 依次尝试候选文件，返回第一个可读内容；全都读不到 → null（静默降级，不抛错） */
+export function firstReadable(candidates: string[], read: (p: string) => string): string | null {
+  for (const file of candidates) {
+    try { return read(file) } catch { /* 试下一个 */ }
+  }
+  return null
+}
+
+/** F5 开关解析：`$DSH_HOME/worktable-voice.json` 的 `{"voiceAsrEnabled": bool}`；不存在/坏 JSON/非布尔 → 默认 true */
+export function parseVoiceConfig(raw: unknown): { voiceAsrEnabled: boolean } {
+  try {
+    const doc = typeof raw === 'string' ? JSON.parse(raw) : null
+    if (doc && typeof doc === 'object' && typeof (doc as any).voiceAsrEnabled === 'boolean') {
+      return { voiceAsrEnabled: (doc as any).voiceAsrEnabled }
+    }
+  } catch { /* 坏 JSON → 默认 */ }
+  return { voiceAsrEnabled: true }
+}
+
+/** 读 F5 开关文件：`$DSH_HOME/worktable-voice.json`（不存在/读不到 → 默认 true + exists:false） */
+function loadVoiceConfig(): { voiceAsrEnabled: boolean; exists: boolean } {
+  try {
+    const file = pathResolve(resolveDshHomeSafe(), 'worktable-voice.json')
+    return { ...parseVoiceConfig(readFileSync(file, 'utf8')), exists: true }
+  } catch { return { voiceAsrEnabled: true, exists: false } }
+}
+
+/** F1 埋点增量归一：非数字/负值 → 0；单次上限 1000（防一次请求把计数写爆） */
+export function normalizeDraftTake(value: unknown): number {
+  return Math.max(0, Math.min(1000, Math.floor(Number(value) || 0)))
+}
+
+function voiceCheckLogPath(): string { return pathResolve(resolveDshHomeSafe(), 'logs', 'dsh-worktable-check.json') }
+
+/** 当前 profile 名：宿主注入 DSH_PROFILE；缺省 'web'（本 REQ 的目标 profile） */
+function currentProfileName(): string {
+  const p = process.env.DSH_PROFILE
+  return typeof p === 'string' && p.trim() ? p.trim() : 'web'
+}
+
+/** profile 的 cordis.patch.yml 候选路径（**只用于判存在性，内容绝不外带**） */
+export function patchCandidates(env: Record<string, string | undefined>, home: string, profile: string): string[] {
+  const explicit = typeof env?.DSH_PROFILE_DIR === 'string' ? env.DSH_PROFILE_DIR.trim() : ''
+  const out: string[] = []
+  if (explicit) out.push(pathResolve(explicit, 'cordis.patch.yml'))
+  out.push(pathResolve(home, 'profiles', profile, 'cordis.patch.yml'))
+  return Array.from(new Set(out))
+}
+
+/** 本轮自检结果（供只读路由在产物缺失时兜底；仅白名单字段） */
+let lastVoiceCheckPayload: VoiceCheckPayload | null = null
+
+/** 采集一次自检结果（同步；任何异常都被吞成 false / null，不外抛原文） */
+function collectVoiceCheck(ctx: any, time: string): VoiceCheckPayload {
+  const read = (p: string) => readFileSync(p, 'utf8')
+  let catalogText: string | null = null
+  let patchText: string | null = null
+  try { catalogText = firstReadable(catalogCandidates(process.env, process.execPath), read) } catch { catalogText = null }
+  try { patchText = firstReadable(patchCandidates(process.env, resolveDshHomeSafe(), currentProfileName()), read) } catch { patchText = null }
+  let loaded = false
+  try {
+    const loader: any = (ctx as any)?.get?.('loader') ?? null
+    if (loader && typeof loader.entries === 'function') loaded = detectLegacyLoaded(loader.entries())
+  } catch { loaded = false }
+  return buildCheckPayload({
+    time,
+    patchHasLegacy: textMentionsLegacy(patchText),
+    catalogHasLegacy: textMentionsLegacy(catalogText),
+    catalogChecked: typeof catalogText === 'string',   // 目录/文件不存在 → false（静默降级）
+    legacyLoaded: loaded,
+  })
+}
+
+/** 启动自检：写产物 + 命中告警。
+ *  - 用 `setTimeout(…, 0)` 推迟到当前 tick 之后 → 异步、不阻塞、失败不影响插件加载；
+ *  - 1.5s 后再补一次：loader 的 entry 是加载过程中逐个建的，首轮枚举可能还没建全（防漏报）；
+ *  - 产物含且仅含白名单 6 字段，异常只体现为 catalogChecked:false / 产物缺失。 */
+function scheduleVoiceCheck(ctx: any): void {
+  const time = new Date().toISOString()
+  let warned = false   // 每轮启动最多告警一次（两趟自检不重复刷日志）
+  const run = () => {
+    void (async () => {
+      try {
+        const payload = collectVoiceCheck(ctx, time)
+        lastVoiceCheckPayload = payload
+        try {
+          const file = voiceCheckLogPath()
+          await mkdir(dirname(file), { recursive: true })
+          await writeFile(file, JSON.stringify(payload, null, 2) + '\n', 'utf8')
+        } catch { /* 落盘失败不影响插件加载 */ }
+        if (!warned && (payload.legacyLoaded || payload.catalogHasLegacy || payload.patchHasLegacy)) {
+          warned = true
+          try { ctx.logger?.warn?.(LEGACY_VOICE_WARNING) } catch { /* 日志失败忽略 */ }
+        }
+      } catch { /* 自检整体失败：不影响插件加载 */ }
+    })()
+  }
+  try {
+    setTimeout(run, 0)
+    setTimeout(run, 1500)
+  } catch { /* 定时器不可用：放弃自检，不影响插件加载 */ }
 }
 
 /* ── 路径策略 ─────────────────────────────────────────────────────────────
@@ -566,15 +770,23 @@ export function apply(ctx: Context) {
           const body = await readJsonBody(req)
           const delta = body && typeof body.corrected === 'object' && body.corrected ? body.corrected : null
           const learn = body && body.learn && typeof body.learn === 'object' ? body.learn : null
-          if (!delta && !learn) { json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} 或 {learn:{wrong,right}}' }); return }
+          // REQ-20261008-0010 F1 埋点：点「📥 取输入框草稿」→ {"draftTake":1}。
+          // 与 corrected / learn 并列，三者可同时出现；读取仍走本路由的 GET（content.stats.draftTakes）。
+          const draftTake = normalizeDraftTake(body && body.draftTake)
+          if (!delta && !learn && !draftTake) { json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} 、 {learn:{wrong,right}} 或 {draftTake:1}' }); return }
           let doc: any = null
           try { doc = JSON.parse(await readFile(file, 'utf8')) } catch { /* 见下 */ }
           if (!doc || typeof doc !== 'object') { json(res, 404, { error: 'user memory file missing or unreadable' }); return }
+          doc.stats = doc.stats && typeof doc.stats === 'object' ? doc.stats : {}
+
+          // ⓪ 主路径采用度计数（F1 · 缺陷 #52：字段名定死 stats.draftTakes）
+          if (draftTake) {
+            doc.stats.draftTakes = Math.floor(Number(doc.stats.draftTakes) || 0) + draftTake
+          }
 
           // ① 记一次纠错（审计）
           let added = 0
           if (delta) {
-            doc.stats = doc.stats && typeof doc.stats === 'object' ? doc.stats : {}
             doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === 'object' ? doc.stats.corrected : {}
             for (const [k, v] of Object.entries(delta as Record<string, unknown>)) {
               const n = Math.max(0, Math.min(1000, Math.floor(Number(v) || 0)))
@@ -617,7 +829,13 @@ export function apply(ctx: Context) {
           doc.savedAt = Date.now()
           const fsx = await import('node:fs/promises')
           await fsx.writeFile(file, JSON.stringify(doc, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
-          json(res, 200, { ok: true, added, corrected: (doc.stats && doc.stats.corrected) || {}, learned })
+          json(res, 200, {
+            ok: true,
+            added,
+            corrected: (doc.stats && doc.stats.corrected) || {},
+            draftTakes: Math.floor(Number(doc.stats && doc.stats.draftTakes) || 0),
+            learned,
+          })
           return
         }
 
@@ -625,6 +843,37 @@ export function apply(ctx: Context) {
       } catch (err) { json(res, 500, { error: String(err) }) }
     },
   })
+
+  // 旧语音插件自检产物（REQ-20261008-0010 F3）：页面显示一行状态。
+  // 产物 = $DSH_HOME/logs/dsh-worktable-check.json；不存在 → 200 {exists:false}（页面友好，不必处理 404）。
+  // 回显前一律经 pickVoiceCheckFields() 过白名单，避免产物被篡改后把任意内容带进页面。
+  register({
+    kind: 'exact',
+    path: '/api/worktable/legacy-voice-check',
+    handler: async (_req: any, res: any) => {
+      try {
+        const raw = await readFile(voiceCheckLogPath(), 'utf8')
+        const picked = pickVoiceCheckFields(JSON.parse(raw))
+        json(res, 200, picked ? { exists: true, ...picked } : { exists: false })
+      } catch {
+        json(res, 200, lastVoiceCheckPayload ? { exists: true, ...lastVoiceCheckPayload } : { exists: false })
+      }
+    },
+  })
+
+  // F5 开关（REQ-20261008-0010）：只读暴露 $DSH_HOME/worktable-voice.json 的 voiceAsrEnabled。
+  // 本 REQ **不实现 F2**（本地转写桥等 M0 判据），这里只是把开关读起来 + 让页面看得见。
+  const voiceConfig = loadVoiceConfig()
+  register({
+    kind: 'exact',
+    path: '/api/worktable/voice-config',
+    handler: (_req: any, res: any) => {
+      json(res, 200, { voiceAsrEnabled: voiceConfig.voiceAsrEnabled, exists: voiceConfig.exists })
+    },
+  })
+
+  // F3 启动自检：异步写产物 + 命中告警（失败不影响插件加载）
+  scheduleVoiceCheck(ctx)
 
   // 公共级时间事实（REQ-20261008-0006 的 F3）：日期/星期/时区由**宿主**给出，不靠模型猜。
   // 与 duet 的 clockLine 同源思路；本路由让页面/agent 都取同一份权威时间。
