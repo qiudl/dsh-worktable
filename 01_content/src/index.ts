@@ -1,8 +1,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import { execFile } from 'node:child_process'
-import { readdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
-import { dirname, resolve as pathResolve, sep } from 'node:path'
+import { existsSync, readdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { basename, dirname, resolve as pathResolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -182,6 +182,400 @@ function guarded(ctx: any, handler: (req: any, res: any) => any) {
   }
 }
 
+/* ── 旧语音插件的回流检测（REQ-20261008-0010 · F3，P0）────────────────────
+ * 旧插件 `@deepseek-ai/dsh-client-ui-voice` 有两条回流通道：
+ *   ① 盘上 `node_modules/@deepseek-ai/dsh-client-ui-voice.before-REQ-20260918-00{12,13}`；
+ *   ② Slark 自带 `dsh-default-plugins/catalog.v1.json`（`entryIds:["ui-voice"]`）→ 可一键装回。
+ * 它走 `ctx.connection.fetch.register`（另一张表），不与本地桥的 webServer exact 冲突 →
+ * 后果**不是**"启动故障"，而是「与本地桥静默遮蔽（exact 优先于 /api 前缀）+ 静默云计费」。
+ *
+ * 本段只做「检测 + 提示」：不改 Slark 应用包、不读/不写任何凭据，
+ * 产物字段白名单恰好 6 个（只布尔/字符串枚举），异常一律不外抛原文。
+ * ─────────────────────────────────────────────────────────────────────── */
+
+/** 匹配规则：只看 `entry.options.name` 是否包含该包名。
+ *  ⚠️ 禁止用 id 前缀匹配：官方 bundle 的 entry id 是 `ui-voice-input`（`ui-voice` 前缀会误报），
+ *  而它的 entry name 是 `@deepseek-ai/dsh-experimental-client-ui-voice-input`（不含本子串 → 不误报）。 */
+export function parseLegacyMatch(name: unknown): boolean {
+  return typeof name === 'string' && name.includes('dsh-client-ui-voice')
+}
+
+/** 文本里是否出现该包名（只回布尔，**绝不把文本带出去**） */
+export function textMentionsLegacy(text: unknown): boolean {
+  return typeof text === 'string' && text.includes('dsh-client-ui-voice')
+}
+
+/** 按 YAML 行内注释规则截断一行：从「行首或前置空白之后的第一个 `#`」起丢弃该行剩余部分。
+ *  - `#` 前必须有空白（或位于行首）才算注释，故 `foo#bar` 不被截断（YAML plain scalar）；
+ *  - `'…'` / `"…"` 引号字符串内的 `#` **不算**注释（YAML quoted scalar）；按 YAML 处理
+ *    `''`（单引号内转义单引号）与 `\"`（双引号内转义双引号）。
+ *  只回文本、不做任何 IO；这是纯文本近似，非完整 YAML 解析。 */
+export function stripYamlLineComment(line: string): string {
+  let quote = ''
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (quote) {
+      if (quote === '"' && c === '\\') { i++; continue }
+      if (c === quote) {
+        if (quote === "'" && line[i + 1] === "'") { i++; continue }   // YAML: '' 表示一个单引号
+        quote = ''
+      }
+      continue
+    }
+    if (c === "'" || c === '"') { quote = c; continue }
+    if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i)
+  }
+  return line
+}
+
+/** F3① 判定：文本里是否有该插件的**非注释条目**（只回布尔，**绝不把文本带出去**）。
+ *  PRD §3.2 F3① 的语义是「profile patch 是否含该插件**条目**」——注释里的提及不算命中
+ *  （例：`# 2026-10-04 已摘除 @deepseek-ai/dsh-client-ui-voice` 是摘除记录，不是回流信号）。
+ *  实现按 YAML 行内注释规则**逐行截断**后匹配（行首注释与行内尾随注释都丢弃），
+ *  **不引入 YAML 解析**（避免新风险）；引号字符串内的提及仍算命中（与 PRD「条目」口径的
+ *  已知偏差：把 `note: "@deepseek-ai/dsh-client-ui-voice"` 这类任意字符串值当条目，
+ *  要区分它需要完整 YAML 解析，本 REQ 不做）。 */
+export function textMentionsLegacyEntry(text: unknown): boolean {
+  if (typeof text !== 'string') return false
+  const entryText = text.split('\n').map(stripYamlLineComment).join('\n')
+  return textMentionsLegacy(entryText)
+}
+
+/** 枚举 loader entries（取 `entry.options.name`）判断旧插件是否已加载；枚举异常一律视为未命中 */
+export function detectLegacyLoaded(entries: Iterable<any>): boolean {
+  try {
+    for (const entry of entries) if (parseLegacyMatch(entry?.options?.name)) return true
+  } catch { /* 枚举失败 → 未命中（不外抛） */ }
+  return false
+}
+
+/** 自检产物（字段白名单恰好这 6 个；只允许布尔/字符串枚举） */
+export type VoiceCheckPayload = {
+  time: string
+  patchHasLegacy: boolean
+  catalogHasLegacy: boolean
+  legacyLoaded: boolean
+  catalogChecked: boolean
+  conclusion: string
+}
+
+/** 产物字段名白名单（测试与复核用；顺序即产物字段顺序） */
+export const VOICE_CHECK_FIELDS = ['time', 'patchHasLegacy', 'catalogHasLegacy', 'legacyLoaded', 'catalogChecked', 'conclusion'] as const
+
+/** conclusion 枚举（异常只体现为 catalogChecked:false，不把错误原文写进产物） */
+export const VOICE_CHECK_CONCLUSIONS = ['legacy-loaded', 'legacy-present', 'clean', 'catalog-unchecked'] as const
+
+/** 只按入参构造产物：不读文件、不带原文；缺省/非布尔一律按 false（异常不外抛） */
+export function buildCheckPayload(input: {
+  time?: unknown
+  patchHasLegacy?: unknown
+  catalogHasLegacy?: unknown
+  legacyLoaded?: unknown
+  catalogChecked?: unknown
+}): VoiceCheckPayload {
+  const patchHasLegacy = input.patchHasLegacy === true
+  const catalogHasLegacy = input.catalogHasLegacy === true
+  const legacyLoaded = input.legacyLoaded === true
+  const catalogChecked = input.catalogChecked === true
+  const conclusion = legacyLoaded ? 'legacy-loaded'
+    : (patchHasLegacy || catalogHasLegacy) ? 'legacy-present'
+      : catalogChecked ? 'clean' : 'catalog-unchecked'
+  return {
+    time: typeof input.time === 'string' && input.time ? input.time : new Date().toISOString(),
+    patchHasLegacy,
+    catalogHasLegacy,
+    legacyLoaded,
+    catalogChecked,
+    conclusion,
+  }
+}
+
+/** 只透出白名单字段（防产物被外部篡改后把任意内容回显给页面） */
+export function pickVoiceCheckFields(doc: any): VoiceCheckPayload | null {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null
+  return buildCheckPayload({
+    time: typeof doc.time === 'string' ? doc.time : '',
+    patchHasLegacy: doc.patchHasLegacy,
+    catalogHasLegacy: doc.catalogHasLegacy,
+    legacyLoaded: doc.legacyLoaded,
+    catalogChecked: doc.catalogChecked,
+  })
+}
+
+/** 命中（已加载 / 可一键装回 / profile 配置里出现）时的告警：三点必须齐全 */
+export const LEGACY_VOICE_WARNING =
+  '[dsh-worktable] ⚠️ 检测到旧语音插件 @deepseek-ai/dsh-client-ui-voice 的回流信号：' +
+  '① 装回会与本地桥 /api/voice/asr 静默遮蔽（exact 优先于 /api 前缀，用户无感知）；' +
+  '② 它的 ASR/TTS 走云（豆包 ASR volc.bigasr.auc_turbo + 豆包 TTS + ark）→ 静默计费；' +
+  '③ 主路径（输入框麦克风 + 工作台）已覆盖需求，勿装回。'
+
+/** catalog 候选路径：env `DSH_HOST_BUNDLED_PLUGINS_ROOT` → 宿主可执行文件相邻 → Slark 硬编码兜底 */
+export function catalogCandidates(env: Record<string, string | undefined>, execPath: string): string[] {
+  const out: string[] = []
+  const root = typeof env?.DSH_HOST_BUNDLED_PLUGINS_ROOT === 'string' ? env.DSH_HOST_BUNDLED_PLUGINS_ROOT.trim() : ''
+  if (root) out.push(pathResolve(root, 'catalog.v1.json'))
+  if (typeof execPath === 'string' && execPath) out.push(pathResolve(dirname(execPath), '..', 'dsh-default-plugins', 'catalog.v1.json'))
+  out.push('/Applications/Slark.app/Contents/Resources/dsh-default-plugins/catalog.v1.json')
+  return Array.from(new Set(out))
+}
+
+/** 依次尝试候选文件，返回第一个可读内容；全都读不到 → null（静默降级，不抛错） */
+export function firstReadable(candidates: string[], read: (p: string) => string): string | null {
+  for (const file of candidates) {
+    try { return read(file) } catch { /* 试下一个 */ }
+  }
+  return null
+}
+
+/** F5 开关的 error 短枚举（**不含路径/内容**：日志与页面只回这个枚举） */
+export const VOICE_CONFIG_ERRORS = ['bad-json', 'not-object', 'not-boolean', 'read-failed'] as const
+export type VoiceConfigError = typeof VOICE_CONFIG_ERRORS[number]
+
+/** F5 开关状态（CR-23118 ③：非法值不再静默）。
+ *  - 缺文件 → `{voiceAsrEnabled:true, exists:false, source:'default'}`（默认行为保留，**不标 invalid**）；
+ *  - 文件存在但坏 JSON / 非对象 / 值非布尔 → `invalid:true` + `voiceAsrEnabled` 用默认 `true` + `error` 短枚举；
+ *  - 值合法布尔 → 原值，**不出现 invalid**（`false` 也如实回 `false`）。
+ *  `source` 表示**生效值**的来源：读到合法布尔为 `'file'`，其余（缺文件/非法回落）为 `'default'`。 */
+export type VoiceConfigStatus = {
+  voiceAsrEnabled: boolean
+  exists: boolean
+  source: 'file' | 'default'
+  invalid?: true
+  error?: VoiceConfigError
+}
+
+/** F5 开关解析：`{"voiceAsrEnabled": bool}` → 原值；坏 JSON / 非对象 / 非布尔 → 默认 true + invalid 标记。
+ *  入参非字符串（未读到内容）视为「没有配置」→ 默认 true，**不标 invalid**（与缺文件同口径）。 */
+export function parseVoiceConfig(raw: unknown): { voiceAsrEnabled: boolean; invalid?: true; error?: VoiceConfigError } {
+  if (typeof raw !== 'string') return { voiceAsrEnabled: true }
+  let doc: any
+  try { doc = JSON.parse(raw) } catch { return { voiceAsrEnabled: true, invalid: true, error: 'bad-json' } }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { voiceAsrEnabled: true, invalid: true, error: 'not-object' }
+  if (typeof doc.voiceAsrEnabled !== 'boolean') return { voiceAsrEnabled: true, invalid: true, error: 'not-boolean' }
+  return { voiceAsrEnabled: doc.voiceAsrEnabled }
+}
+
+/** 读 F5 开关文件：`$DSH_HOME/worktable-voice.json`。
+ *  缺文件/读失败 → 默认 true + `exists:false`（读失败另外标 `invalid:true` + `error:'read-failed'`）；
+ *  读到了就交给 `parseVoiceConfig` 区分「合法 / 非法」——非法时标 invalid，值仍用默认 true。 */
+function loadVoiceConfig(): VoiceConfigStatus {
+  const file = pathResolve(resolveDshHomeSafe(), 'worktable-voice.json')
+  let raw: string
+  try {
+    raw = readFileSync(file, 'utf8')
+  } catch {
+    if (existsSync(file)) {
+      return { voiceAsrEnabled: true, exists: true, source: 'default', invalid: true, error: 'read-failed' }
+    }
+    return { voiceAsrEnabled: true, exists: false, source: 'default' }
+  }
+  const parsed = parseVoiceConfig(raw)
+  if (parsed.invalid) return { voiceAsrEnabled: parsed.voiceAsrEnabled, exists: true, source: 'default', invalid: true, error: parsed.error }
+  return { voiceAsrEnabled: parsed.voiceAsrEnabled, exists: true, source: 'file' }
+}
+
+/** 配置非法时的宿主告警（CR-23118 ③）：只含**短枚举**与固定文件名，
+ *  **不含文件内容、不含绝对路径**（不得把配置原文带进日志）。 */
+export function voiceConfigInvalidWarning(error: string): string {
+  return '[dsh-worktable] ⚠️ 语音开关配置无效（$DSH_HOME/worktable-voice.json：' + error +
+    '）→ voiceAsrEnabled 已按默认 true 生效；请修正该文件（或删掉它走默认）'
+}
+
+/* ── F2 本地转写桥（REQ-20261008-0010）─────────────────────────────────────
+ * duet 桌面云桥不可用时回落到 `POST /api/voice/asr`（M0 实测：20s 内 5+ 次命中，
+ * `audio/wav` + `x-voice-mode: duet`）→ 本桥把该 WAV 直接交给宿主本地 `speechToText`
+ * （`resolve` → `transcribe`），**只转发不落盘**：不写文件、不记正文、不上云。
+ * 失败/超时/停用一律回 `200 {"text":""}`，让 duet 侧保持 `unavailable`（显式失败、
+ * 不编造）——**绝不**回 5xx 让 duet 抛异常（PRD §3.2 F2）。
+ * ─────────────────────────────────────────────────────────────────────── */
+
+/** 桥内单段上限：与官方 `api-speech-to-text` 的 `maxAudioBytes` 默认值一致（4MiB）。 */
+export const VOICE_ASR_MAX_BYTES = 4 * 1024 * 1024
+/** 桥对 duet 的**应答期限**（CR-23122 M2）：duet 侧 fetch 上限 20s，桥取 18s，
+ *  保证"桥一定先应答"（超时回 `200 {"text":""}`，**不 5xx**）。
+ *  ⚠️ 它只决定"我们回什么"，**不**用于中止 provider（见下一个常量）。 */
+export const VOICE_ASR_RESPONSE_DEADLINE_MS = 18000
+/** 传给 provider 的 signal 超时（CR-23122 M2）：只是"兜底闸门"，取 60s 远大于正常推理/冷启动，
+ *  **不允许在推理期间触发** —— provider（speech-to-text-sensevoice）在 catch 里对非
+ *  `SpeechInputError` 执行 `await this.stop()`，会终止与主路径（输入框麦克风）**共享**的本地
+ *  worker（`…speech-to-text-sensevoice/lib/index.js:821,855-856`，见 CR 报告 M2）。 */
+export const VOICE_ASR_PROVIDER_TIMEOUT_MS = 60000
+/** 桥的并发上限（CR-23122 M3）：超过 → 不读 body、不调用识别，直接 `200 {"text":""}` + 一行 warn。 */
+export const VOICE_ASR_MAX_INFLIGHT = 2
+/** 桥的速率上限：60s 滑动窗内最多 30 次（同上，超限即回空文本）。 */
+export const VOICE_ASR_MAX_PER_MINUTE = 30
+/** `readJsonBody` 的共用前置上限（CR-23122 M1）。
+ *  取值依据（**grep 实测**，不是"顺手 1MiB"）：`readJsonBody` 原来**没有任何上限**，而它的调用方
+ *  `/api/worktable/write` 显式允许 `content` ≤20MiB（本文件「content too large」413 分支）——
+ *  取 1MiB 会把 1–20MiB 的合法 MD 保存判成"缺 path"（400），属回归。
+ *  故取 20MiB + JSON 转义余量 = 32MiB：既保住既有语义，又把"整包读进内存"的规模封顶。 */
+export const READ_JSON_MAX_BYTES = 32 * 1024 * 1024
+/** 桥回空文本的原因短枚举（日志只回这个，**不含音频内容 / 不含路径**）。
+ *  `timeout`（M2：慢，不是崩）/ `busy`、`rate-limited`（M3：限流）为 CR-23122 新增。 */
+export const VOICE_ASR_REASONS = ['disabled', 'rejected', 'unavailable', 'failed', 'timeout', 'busy', 'rate-limited'] as const
+export type VoiceAsrReason = typeof VOICE_ASR_REASONS[number]
+
+/** 桥的上限判定（沿用官方 `validateWave` 的**大小**语义）：
+ *  - 必须 `byteLength > 44`（WAV 头 44B；与 duet 渲染侧 `parseDshVoiceRequest` 同口径）；
+ *  - 必须 `byteLength ≤ maxBytes`（默认 4MiB，同官方 `maxAudioBytes`）。
+ *  头部规范性与 120s 时长由 provider 的 `validateWave` 负责——那类非法音频会在
+ *  `transcribe` 里抛错、同样落到「识别为空」，故这里**不**重复校验头，
+ *  以免把 duet 的合法音频误判成空文本（那会让桥变死代码）。 */
+export function checkVoiceWaveBounds(bytes: unknown, maxBytes: number = VOICE_ASR_MAX_BYTES): boolean {
+  const n = (bytes as { byteLength?: unknown } | null | undefined)?.byteLength
+  return typeof n === 'number' && Number.isFinite(n) && n > 44 && n <= maxBytes
+}
+
+/** 桥的宿主日志行（一行、固定文案 + 短枚举；**不含音频内容/字节数/路径**）。 */
+export function voiceAsrLogLine(reason: VoiceAsrReason | string): string {
+  return '[dsh-worktable] /api/voice/asr 本地转写桥：' + reason + '（返回空文本；音频不落盘）'
+}
+
+/** CR-23122 M1 共用的 body 前置上限守卫：**边读边判**，不再"整包读进内存后才看大小"。
+ *  旧实现（`readRawBody` / `readJsonBody`）把 body 全累加成 Buffer[] 再 `Buffer.concat`
+ *  （`readRawBody` 还多一次 `new Uint8Array` 拷贝）→ CR 实测 96MiB 体 → RSS ≈3×body，
+ *  且上限判定发生在拷贝**之后**。本守卫：
+ *   - 先看 `content-length`：声明值 > maxBytes → **一字节不读**（连异步迭代器都不启动）直接拒绝。
+ *     这里**不** `destroy()`：先保证 200 应答能正常发出去；未消费的 body 由 Node 按背压处理
+ *     （socket 读停在 highWaterMark），不会无界缓冲。
+ *   - 边读边累计：一越限 → **停止读取 + `req.destroy()`**（中断上传、释放 socket），返回超限。
+ *   - 无 `content-length` / 分块传输同样安全（靠累计判定兜底）。
+ *   - 中途断流 / 被销毁 → 也返回超限结果（调用方按既有失败语义处理，绝不 5xx）。
+ *  返回 Buffer（Buffer 即 Uint8Array）：`checkVoiceWaveBounds` 只读 `.byteLength`，无需再拷一次。 */
+export type BodyReadResult = { ok: true; bytes: Buffer } | { ok: false; reason: 'too-large' }
+
+export async function readBodyLimited(req: any, maxBytes: number): Promise<BodyReadResult> {
+  const declared = Number(req?.headers?.['content-length'])
+  if (Number.isFinite(declared) && declared > maxBytes) return { ok: false, reason: 'too-large' }
+  const chunks: Buffer[] = []
+  let total = 0
+  try {
+    for await (const chunk of req) {
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+      total += buf.length
+      if (total > maxBytes) {
+        try { req?.destroy?.() } catch { /* 已断开：忽略 */ }
+        return { ok: false, reason: 'too-large' }
+      }
+      chunks.push(buf)
+    }
+  } catch {
+    try { req?.destroy?.() } catch { /* 已断开：忽略 */ }
+    return { ok: false, reason: 'too-large' }
+  }
+  return { ok: true, bytes: Buffer.concat(chunks) }
+}
+
+/** 读原始请求体：桥的载荷是 WAV 字节（**不是** JSON，不能用 readJsonBody）。
+ *  CR-23122 M1：改走共用前置上限（默认 4MiB），超限在**读取途中**即被截断并 `destroy()`
+ *  （不再像旧实现那样整包读入 + concat 之后才判 4MiB）。超限/读失败 → `null`。 */
+async function readRawBody(req: any, maxBytes: number = VOICE_ASR_MAX_BYTES): Promise<Uint8Array | null> {
+  const read = await readBodyLimited(req, maxBytes)
+  return read.ok ? read.bytes : null
+}
+
+/** 进程内按文件路径串行化：同一路径的「读—改—写」排队执行（CR-23118 ②：防并发丢更新）。
+ *  - 前一个任务失败也继续跑下一个（队列不因单次失败卡死）；
+ *  - 调用方拿到自己那次任务的真实结果/异常；队列尾只存吞掉异常的空链，避免 unhandled rejection。 */
+const fileQueues = new Map<string, Promise<unknown>>()
+export function withFileLock<T>(file: string, task: () => Promise<T>): Promise<T> {
+  const prev = fileQueues.get(file) ?? Promise.resolve()
+  const run = prev.then(task, task)
+  fileQueues.set(file, run.then(() => undefined, () => undefined))
+  return run
+}
+
+/** 原子落盘：同目录临时文件 + `rename` 替换（POSIX rename 原子，读者见到的是完整新旧版本之一）。
+ *  临时文件是新建的 → `mode`（0600）生效，rename 后目标文件即该权限（保留既有语义）；
+ *  rename 失败先清理临时文件再重抛（错误交给调用方既有的 catch）。 */
+export async function writeFileAtomic(file: string, data: string, mode: number): Promise<void> {
+  const fsx = await import('node:fs/promises')
+  const tmp = pathResolve(dirname(file), '.' + basename(file) + '.' + process.pid + '.' + Date.now().toString(36) + '.' + Math.random().toString(36).slice(2, 8) + '.tmp')
+  await fsx.writeFile(tmp, data, { encoding: 'utf8', mode })
+  try {
+    await fsx.rename(tmp, file)
+  } catch (err) {
+    try { await fsx.unlink(tmp) } catch { /* 清理失败忽略 */ }
+    throw err
+  }
+}
+
+/** F1 埋点增量归一：非数字/负值 → 0；单次上限 1000（防一次请求把计数写爆） */
+export function normalizeDraftTake(value: unknown): number {
+  return Math.max(0, Math.min(1000, Math.floor(Number(value) || 0)))
+}
+
+function voiceCheckLogPath(): string { return pathResolve(resolveDshHomeSafe(), 'logs', 'dsh-worktable-check.json') }
+
+/** 当前 profile 名：宿主注入 DSH_PROFILE；缺省 'web'（本 REQ 的目标 profile） */
+function currentProfileName(): string {
+  const p = process.env.DSH_PROFILE
+  return typeof p === 'string' && p.trim() ? p.trim() : 'web'
+}
+
+/** profile 的 cordis.patch.yml 候选路径（**只用于判存在性，内容绝不外带**） */
+export function patchCandidates(env: Record<string, string | undefined>, home: string, profile: string): string[] {
+  const explicit = typeof env?.DSH_PROFILE_DIR === 'string' ? env.DSH_PROFILE_DIR.trim() : ''
+  const out: string[] = []
+  if (explicit) out.push(pathResolve(explicit, 'cordis.patch.yml'))
+  out.push(pathResolve(home, 'profiles', profile, 'cordis.patch.yml'))
+  return Array.from(new Set(out))
+}
+
+/** 本轮自检结果（供只读路由在产物缺失时兜底；仅白名单字段） */
+let lastVoiceCheckPayload: VoiceCheckPayload | null = null
+
+/** 采集一次自检结果（同步；任何异常都被吞成 false / null，不外抛原文） */
+function collectVoiceCheck(ctx: any, time: string): VoiceCheckPayload {
+  const read = (p: string) => readFileSync(p, 'utf8')
+  let catalogText: string | null = null
+  let patchText: string | null = null
+  try { catalogText = firstReadable(catalogCandidates(process.env, process.execPath), read) } catch { catalogText = null }
+  try { patchText = firstReadable(patchCandidates(process.env, resolveDshHomeSafe(), currentProfileName()), read) } catch { patchText = null }
+  let loaded = false
+  try {
+    const loader: any = (ctx as any)?.get?.('loader') ?? null
+    if (loader && typeof loader.entries === 'function') loaded = detectLegacyLoaded(loader.entries())
+  } catch { loaded = false }
+  return buildCheckPayload({
+    time,
+    patchHasLegacy: textMentionsLegacyEntry(patchText),   // 只认非注释条目（注释提及不算命中）
+    catalogHasLegacy: textMentionsLegacy(catalogText),
+    catalogChecked: typeof catalogText === 'string',   // 目录/文件不存在 → false（静默降级）
+    legacyLoaded: loaded,
+  })
+}
+
+/** 启动自检：写产物 + 命中告警。
+ *  - 用 `setTimeout(…, 0)` 推迟到当前 tick 之后 → 异步、不阻塞、失败不影响插件加载；
+ *  - 1.5s 后再补一次：loader 的 entry 是加载过程中逐个建的，首轮枚举可能还没建全（防漏报）；
+ *  - 产物含且仅含白名单 6 字段，异常只体现为 catalogChecked:false / 产物缺失。 */
+function scheduleVoiceCheck(ctx: any): void {
+  const time = new Date().toISOString()
+  let warned = false   // 每轮启动最多告警一次（两趟自检不重复刷日志）
+  const run = () => {
+    void (async () => {
+      try {
+        const payload = collectVoiceCheck(ctx, time)
+        lastVoiceCheckPayload = payload
+        try {
+          const file = voiceCheckLogPath()
+          await mkdir(dirname(file), { recursive: true })
+          await writeFile(file, JSON.stringify(payload, null, 2) + '\n', 'utf8')
+        } catch { /* 落盘失败不影响插件加载 */ }
+        if (!warned && (payload.legacyLoaded || payload.catalogHasLegacy || payload.patchHasLegacy)) {
+          warned = true
+          try { ctx.logger?.warn?.(LEGACY_VOICE_WARNING) } catch { /* 日志失败忽略 */ }
+        }
+      } catch { /* 自检整体失败：不影响插件加载 */ }
+    })()
+  }
+  try {
+    setTimeout(run, 0)
+    setTimeout(run, 1500)
+  } catch { /* 定时器不可用：放弃自检，不影响插件加载 */ }
+}
+
 /* ── 路径策略 ─────────────────────────────────────────────────────────────
  * 1) 敏感路径黑名单：读写都拒（凭据 / 私钥 / 钥匙串）。
  * 2) 可写根白名单：客户端上报的项目文件夹（POST /api/worktable/roots），
@@ -236,10 +630,13 @@ function writePathReject(abs: string): string | undefined {
   return inside ? undefined : 'outside project folders'
 }
 
-async function readJsonBody(req: any): Promise<any> {
-  const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
-  const text = Buffer.concat(chunks).toString('utf8')
+/** 读 JSON body。**既有语义保持不变**：空体 / 坏 JSON → `{}`（调用方因此不会 5xx）。
+ *  CR-23122 M1：改走共用前置上限守卫（`readBodyLimited`），超限也回 `{}`（**不抛**），
+ *  不再"整包读进内存 + Buffer.concat + toString 之后"才处理；上限可用第二参注入（单测用小阈值）。 */
+export async function readJsonBody(req: any, maxBytes: number = READ_JSON_MAX_BYTES): Promise<any> {
+  const read = await readBodyLimited(req, maxBytes)
+  if (!read.ok) return {}                 // 超限（含 content-length 声明超限）→ 与坏 JSON 同形
+  const text = read.bytes.toString('utf8')
   if (!text) return {}
   try { return JSON.parse(text) } catch { return {} }
 }
@@ -379,7 +776,17 @@ async function readLocalConfigField(fileName: string, field: string): Promise<st
   return null
 }
 
-export function apply(ctx: Context) {
+/** 桥的运行时上限（CR-23122）：默认全部取上面的生产常量；
+ *  第二参**仅供单测**注入小阈值（生产/宿主不传），避免单测真等 18s。 */
+export type VoiceAsrLimitOverrides = {
+  responseDeadlineMs?: number
+  providerTimeoutMs?: number
+  maxInflight?: number
+  maxPerMinute?: number
+  rawMaxBytes?: number
+}
+
+export function apply(ctx: Context, voiceLimitOverrides?: VoiceAsrLimitOverrides) {
   const webServer = (ctx as any).webServer
   if (!webServer) {
     ctx.logger?.warn('[dsh-worktable] ctx.webServer 不可用（headless profile？），跳过服务端路由')
@@ -565,23 +972,80 @@ export function apply(ctx: Context) {
         if (req.method === 'POST') {
           const body = await readJsonBody(req)
           const delta = body && typeof body.corrected === 'object' && body.corrected ? body.corrected : null
-          if (!delta) { json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}}' }); return }
-          let doc: any = null
-          try { doc = JSON.parse(await readFile(file, 'utf8')) } catch { /* 见下 */ }
-          if (!doc || typeof doc !== 'object') { json(res, 404, { error: 'user memory file missing or unreadable' }); return }
-          doc.stats = doc.stats && typeof doc.stats === 'object' ? doc.stats : {}
-          doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === 'object' ? doc.stats.corrected : {}
-          let added = 0
-          for (const [k, v] of Object.entries(delta as Record<string, unknown>)) {
-            const n = Math.max(0, Math.min(1000, Math.floor(Number(v) || 0)))
-            if (!n) continue
-            doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n
-            added += n
-          }
-          doc.savedAt = Date.now()
-          const fsx = await import('node:fs/promises')
-          await fsx.writeFile(file, JSON.stringify(doc, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
-          json(res, 200, { ok: true, added, corrected: doc.stats.corrected })
+          const learn = body && body.learn && typeof body.learn === 'object' ? body.learn : null
+          // REQ-20261008-0010 F1 埋点：点「📥 取输入框草稿」→ {"draftTake":1}。
+          // 与 corrected / learn 并列，三者可同时出现；读取仍走本路由的 GET（content.stats.draftTakes）。
+          const draftTake = normalizeDraftTake(body && body.draftTake)
+          if (!delta && !learn && !draftTake) { json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} 、 {learn:{wrong,right}} 或 {draftTake:1}' }); return }
+          // CR-23118 ②：同一文件的「读—改—写」串行化（进程内按路径排队）+ 临时文件 rename 原子替换。
+          // corrected / learn / draftTake 共用这一条队列，跨请求不再互相覆盖（响应结构与字段名不变）。
+          const out = await withFileLock(file, async (): Promise<{ status: number; body: any }> => {
+            let doc: any = null
+            try { doc = JSON.parse(await readFile(file, 'utf8')) } catch { /* 见下 */ }
+            if (!doc || typeof doc !== 'object') return { status: 404, body: { error: 'user memory file missing or unreadable' } }
+            doc.stats = doc.stats && typeof doc.stats === 'object' ? doc.stats : {}
+
+            // ⓪ 主路径采用度计数（F1 · 缺陷 #52：字段名定死 stats.draftTakes）
+            if (draftTake) {
+              doc.stats.draftTakes = Math.floor(Number(doc.stats.draftTakes) || 0) + draftTake
+            }
+
+            // ① 记一次纠错（审计）
+            let added = 0
+            if (delta) {
+              doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === 'object' ? doc.stats.corrected : {}
+              for (const [k, v] of Object.entries(delta as Record<string, unknown>)) {
+                const n = Math.max(0, Math.min(1000, Math.floor(Number(v) || 0)))
+                if (!n) continue
+                doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n
+                added += n
+              }
+            }
+
+            // ② 学一条纠正（F1 自动学习；缺陷 #20 的根治入口 —— 不依赖 duet 转交，页面/草稿也能学）
+            //    规则（Q003）：用户明确纠正才写；条目带 source；幂等（不重复添加）；只写用户级（AC5）
+            let learned: any = null
+            if (learn) {
+              const wrong = typeof learn.wrong === 'string' ? learn.wrong.trim() : ''
+              const right = typeof learn.right === 'string' ? learn.right.trim() : ''
+              if (!wrong || !right || wrong === right || wrong.length > 40 || right.length > 40) {
+                return { status: 400, body: { error: 'learn 需要 {wrong,right}：非空、不相等、各 ≤40 字' } }
+              }
+              const nowIso = new Date().toISOString()
+              const src = { by: 'user', how: String(learn.how || '页面「记下纠正」'), at: nowIso }
+              doc.homophones = Array.isArray(doc.homophones) ? doc.homophones : []
+              doc.people = Array.isArray(doc.people) ? doc.people : []
+              const existed = doc.homophones.some((h: any) => h && h.wrong === wrong && h.right === right)
+              if (!existed) doc.homophones.push({ wrong, right, ambiguous: false, source: src })
+              let aliasAdded = false
+              const person = doc.people.find((p: any) => p && p.canonical === right)
+              if (person) {
+                person.aliases = Array.isArray(person.aliases) ? person.aliases : []
+                if (!person.aliases.includes(wrong)) { person.aliases.push(wrong); aliasAdded = true }
+                person.lastUsedAt = nowIso
+              } else {
+                doc.people.push({ canonical: right, aliases: [wrong], note: '', source: src, lastUsedAt: nowIso })
+                aliasAdded = true
+              }
+              if (!Array.isArray(doc.terms)) doc.terms = []
+              if (!doc.terms.includes(right)) doc.terms.push(right)
+              learned = { wrong, right, homophoneAdded: !existed, aliasAdded }
+            }
+
+            doc.savedAt = Date.now()
+            await writeFileAtomic(file, JSON.stringify(doc, null, 2) + '\n', 0o600)
+            return {
+              status: 200,
+              body: {
+                ok: true,
+                added,
+                corrected: (doc.stats && doc.stats.corrected) || {},
+                draftTakes: Math.floor(Number(doc.stats && doc.stats.draftTakes) || 0),
+                learned,
+              },
+            }
+          })
+          json(res, out.status, out.body)
           return
         }
 
@@ -589,6 +1053,41 @@ export function apply(ctx: Context) {
       } catch (err) { json(res, 500, { error: String(err) }) }
     },
   })
+
+  // 旧语音插件自检产物（REQ-20261008-0010 F3）：页面显示一行状态。
+  // 产物 = $DSH_HOME/logs/dsh-worktable-check.json；不存在 → 200 {exists:false}（页面友好，不必处理 404）。
+  // 回显前一律经 pickVoiceCheckFields() 过白名单，避免产物被篡改后把任意内容带进页面。
+  register({
+    kind: 'exact',
+    path: '/api/worktable/legacy-voice-check',
+    handler: async (_req: any, res: any) => {
+      try {
+        const raw = await readFile(voiceCheckLogPath(), 'utf8')
+        const picked = pickVoiceCheckFields(JSON.parse(raw))
+        json(res, 200, picked ? { exists: true, ...picked } : { exists: false })
+      } catch {
+        json(res, 200, lastVoiceCheckPayload ? { exists: true, ...lastVoiceCheckPayload } : { exists: false })
+      }
+    },
+  })
+
+  // F5 开关（REQ-20261008-0010）：只读暴露 $DSH_HOME/worktable-voice.json 的 voiceAsrEnabled。
+  // CR-23118 ③：坏 JSON / 非布尔 / 读失败不再静默 —— 回显 invalid:true + error 短枚举（值仍按默认 true），
+  // 并写一行宿主告警（日志只含枚举与固定文件名，不含文件内容/绝对路径）。
+  const voiceConfig = loadVoiceConfig()
+  if (voiceConfig.invalid) {
+    try { ctx.logger?.warn?.(voiceConfigInvalidWarning(String(voiceConfig.error || 'invalid'))) } catch { /* 日志失败忽略 */ }
+  }
+  register({
+    kind: 'exact',
+    path: '/api/worktable/voice-config',
+    handler: (_req: any, res: any) => {
+      json(res, 200, voiceConfig)
+    },
+  })
+
+  // F3 启动自检：异步写产物 + 命中告警（失败不影响插件加载）
+  scheduleVoiceCheck(ctx)
 
   // 公共级时间事实（REQ-20261008-0006 的 F3）：日期/星期/时区由**宿主**给出，不靠模型猜。
   // 与 duet 的 clockLine 同源思路；本路由让页面/agent 都取同一份权威时间。
@@ -615,6 +1114,102 @@ export function apply(ctx: Context) {
       })
     },
   })
+
+  // === F2 本地转写桥（REQ-20261008-0010；替换 M0 探针桩，路径不变）===
+  // duet 桌面云桥回落时打 POST /api/voice/asr（M0 实测命中）→ 交给宿主本地 speechToText。
+  // 只转发不落盘：不写文件、不记正文、不上云；失败/超时/停用一律 200 {"text":""}。
+  // 注册包 try/catch：duplicate exact route 等情况**不得让插件 fiber 加载失败**（F5 fail-soft），
+  // 失败只记一行日志。
+  const voiceAsrLog = (reason: VoiceAsrReason) => {
+    try {
+      // 停用是**预期的配置态** → info（不是告警）；拒绝/不可用/失败/超时/限流 → warn。
+      const line = voiceAsrLogLine(reason)
+      if (reason === 'disabled') ctx.logger?.info?.(line)
+      else ctx.logger?.warn?.(line)
+    } catch { /* 日志失败忽略 */ }
+  }
+  // CR-23122 M2/M3：桥的运行时上限（生产 = 常量；单测可经 apply 第二参注入小阈值）。
+  const voiceLimits = {
+    responseDeadlineMs: voiceLimitOverrides?.responseDeadlineMs ?? VOICE_ASR_RESPONSE_DEADLINE_MS,
+    providerTimeoutMs: voiceLimitOverrides?.providerTimeoutMs ?? VOICE_ASR_PROVIDER_TIMEOUT_MS,
+    maxInflight: voiceLimitOverrides?.maxInflight ?? VOICE_ASR_MAX_INFLIGHT,
+    maxPerMinute: voiceLimitOverrides?.maxPerMinute ?? VOICE_ASR_MAX_PER_MINUTE,
+    rawMaxBytes: voiceLimitOverrides?.rawMaxBytes ?? VOICE_ASR_MAX_BYTES,
+  }
+  // M3 限流状态：**每次 apply 一份**（不放在模块级，避免多实例 / 单测之间串味）。
+  let voiceInFlight = 0
+  const voiceRateStamps: number[] = []
+  try {
+    register({
+      kind: 'exact',
+      path: '/api/voice/asr',
+      handler: async (req: any, res: any) => {
+        // F5 开关（启动时快照）：停用 → 不调用识别，直接空文本 + 一行日志。
+        if (!voiceConfig.voiceAsrEnabled) { voiceAsrLog('disabled'); json(res, 200, { text: '' }); return }
+        // CR-23122 M3：桥内最小限流（in-flight ≤2 + 60s 滑动窗内 ≤30 次）。
+        // 在**读 body 之前**判：超限连 body 都不读，也**不调用** resolve/transcribe，
+        // 只留一行含短枚举（busy / rate-limited）的 warn。
+        if (voiceInFlight >= voiceLimits.maxInflight) { voiceAsrLog('busy'); json(res, 200, { text: '' }); return }
+        const now = Date.now()
+        while (voiceRateStamps.length > 0 && now - voiceRateStamps[0] >= 60000) voiceRateStamps.shift()
+        if (voiceRateStamps.length >= voiceLimits.maxPerMinute) { voiceAsrLog('rate-limited'); json(res, 200, { text: '' }); return }
+        voiceRateStamps.push(now)
+        voiceInFlight += 1
+        try {
+          // CR-23122 M1：超限现在在**读体途中**就被截断（返回 null），不再"整包读进内存
+          // （96MiB 体 → RSS ≈3×body）后才在这里判 4MiB"。
+          const bytes = await readRawBody(req, voiceLimits.rawMaxBytes)
+          // 上限/非法 → 按「识别为空」处理（**不抛给 duet 变成 500**），只留一行日志。
+          if (!bytes || !checkVoiceWaveBounds(bytes, voiceLimits.rawMaxBytes)) { voiceAsrLog('rejected'); json(res, 200, { text: '' }); return }
+          let svc: any = null
+          try { svc = ctx.get?.('speechToText') ?? null } catch { svc = null }
+          if (!svc || typeof svc.resolve !== 'function' || typeof svc.transcribe !== 'function') {
+            voiceAsrLog('unavailable'); json(res, 200, { text: '' }); return
+          }
+          const spec = svc.resolve({ audio: bytes, language: 'zh' })            // 同步，返回 {provider,audio,language}
+          // CR-23122 M2：把「我们对 duet 的应答期限」与「provider 的中止」**解耦**。
+          //  - 传给 provider 的是 60s 长闸门：正常推理/冷启动期间**绝不触发**。原因：sensevoice
+          //    provider 的 catch 对非 SpeechInputError 执行 `await this.stop()`，会终止与主路径
+          //    （输入框麦克风）**共享**的本地 worker（…speech-to-text-sensevoice/lib/index.js:821,855-856）；
+          //    旧实现传 15s abort，推理/冷启动 >15s 时就会掐死共享 worker（CR 报告 M2）。
+          //  - 桥自己的应答期限只由下面的 Promise.race 计时：超时回 `200 {"text":""}`（**不 5xx**），
+          //    **底层推理继续跑完**（结果丢弃、catch 吞掉，防 unhandled rejection）——"慢"不再变成"崩"。
+          //    期限取 18s < duet 的 20s fetch 上限，保证桥一定先应答。
+          //  - 任何情况下都**不调用** provider.stop（我们本来也没调，只是不再用 abort 间接触发它）。
+          //  - provider 侧并发上限 `maxPending=4` 是第二道兜底（另见上面 M3 的桥内 2）。
+          const inference: Promise<any> = Promise.resolve(svc.transcribe(spec, AbortSignal.timeout(voiceLimits.providerTimeoutMs)))
+          inference.catch(() => { /* 期限到点后底层仍可能失败：必须吞掉，防 unhandled rejection */ })
+          let deadlineHit = false
+          let deadlineTimer: any = null
+          const deadline = new Promise<undefined>((resolveDeadline) => {
+            deadlineTimer = setTimeout(() => { deadlineHit = true; resolveDeadline(undefined) }, voiceLimits.responseDeadlineMs)
+            try { deadlineTimer.unref?.() } catch { /* 定时器不拖住宿主退出 */ }
+          })
+          let out: any
+          try {
+            out = await Promise.race([inference, deadline])
+          } finally {
+            clearTimeout(deadlineTimer)
+          }
+          if (deadlineHit) { voiceAsrLog('timeout'); json(res, 200, { text: '' }); return }  // 慢：回空文本，共享 worker 不受影响
+          json(res, 200, { text: typeof out?.text === 'string' ? out.text : '' })            // 空识别 → ""（不编造）
+        } catch {
+          // 失败 / 服务不可用 → 空文本（duet 侧保持 unavailable：显式失败、不编造）。
+          voiceAsrLog('failed')
+          json(res, 200, { text: '' })
+        } finally {
+          // M3：无论走哪条分支（含 rejected/unavailable/timeout/failed）都要归还 in-flight 名额。
+          voiceInFlight -= 1
+        }
+      },
+    })
+  } catch (err) {
+    // 注册失败（如 duplicate exact route）只记一行：不影响插件 fiber 加载。
+    try {
+      ctx.logger?.warn?.('[dsh-worktable] /api/voice/asr 注册失败（已跳过；不影响插件加载）：' +
+        String((err as any)?.message || err))
+    } catch { /* 日志失败忽略 */ }
+  }
 
   // 工作区列表（自定义窗口会话分组用）：
   // 优先走宿主正式服务 ctx.workspaceRegistry（0.1.1/0.1.2 均有，正确感知 DSH_HOME 与存储后端）；
