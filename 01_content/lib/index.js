@@ -361,6 +361,21 @@ function loadVoiceConfig() {
 function voiceConfigInvalidWarning(error) {
   return "[dsh-worktable] \u26A0\uFE0F \u8BED\u97F3\u5F00\u5173\u914D\u7F6E\u65E0\u6548\uFF08$DSH_HOME/worktable-voice.json\uFF1A" + error + "\uFF09\u2192 voiceAsrEnabled \u5DF2\u6309\u9ED8\u8BA4 true \u751F\u6548\uFF1B\u8BF7\u4FEE\u6B63\u8BE5\u6587\u4EF6\uFF08\u6216\u5220\u6389\u5B83\u8D70\u9ED8\u8BA4\uFF09";
 }
+var VOICE_ASR_MAX_BYTES = 4 * 1024 * 1024;
+var VOICE_ASR_TIMEOUT_MS = 15e3;
+var VOICE_ASR_REASONS = ["disabled", "rejected", "unavailable", "failed"];
+function checkVoiceWaveBounds(bytes, maxBytes = VOICE_ASR_MAX_BYTES) {
+  const n = bytes?.byteLength;
+  return typeof n === "number" && Number.isFinite(n) && n > 44 && n <= maxBytes;
+}
+function voiceAsrLogLine(reason) {
+  return "[dsh-worktable] /api/voice/asr \u672C\u5730\u8F6C\u5199\u6865\uFF1A" + reason + "\uFF08\u8FD4\u56DE\u7A7A\u6587\u672C\uFF1B\u97F3\u9891\u4E0D\u843D\u76D8\uFF09";
+}
+async function readRawBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  return new Uint8Array(Buffer.concat(chunks));
+}
 var fileQueues = /* @__PURE__ */ new Map();
 function withFileLock(file, task) {
   const prev = fileQueues.get(file) ?? Promise.resolve();
@@ -1013,51 +1028,57 @@ function apply(ctx) {
       });
     }
   });
-  register({
-    kind: "exact",
-    path: "/api/voice/asr",
-    handler: async (req, res) => {
-      try {
-        const f = pathResolve(resolveDshHomeSafe(), "logs", "m0-voice-probe.json");
-        let d = {};
-        try {
-          d = JSON.parse(await readFile(f, "utf8"));
-        } catch {
-          d = {};
-        }
-        d.hits = (Number(d.hits) || 0) + 1;
-        d.firstAt = d.firstAt || (/* @__PURE__ */ new Date()).toISOString();
-        d.lastAt = (/* @__PURE__ */ new Date()).toISOString();
-        d.lastContentType = String(req?.headers?.["content-type"] || "");
-        d.lastVoiceMode = String(req?.headers?.["x-voice-mode"] || "");
-        const fsxProbe = await import("node:fs/promises");
-        await fsxProbe.writeFile(f, JSON.stringify(d, null, 2) + "\n", { encoding: "utf8", mode: 384 });
-        json(res, 200, { text: "" });
-      } catch (err) {
-        json(res, 500, { error: String(err) });
-      }
-    }
-  });
-  void (async () => {
+  const voiceAsrLog = (reason) => {
     try {
-      const svc = ctx.get("speechToText");
-      const out = {
-        time: (/* @__PURE__ */ new Date()).toISOString(),
-        speechToTextAvailable: !!svc,
-        speechToTextType: typeof svc,
-        hasTranscribe: typeof svc?.transcribe === "function",
-        hasResolve: typeof svc?.resolve === "function",
-        probeVersion: "m0-1"
-      };
-      const fsxProbe = await import("node:fs/promises");
-      await fsxProbe.writeFile(
-        pathResolve(resolveDshHomeSafe(), "logs", "m0-probe.json"),
-        JSON.stringify(out, null, 2) + "\n",
-        { encoding: "utf8", mode: 384 }
-      );
+      const line = voiceAsrLogLine(reason);
+      if (reason === "disabled") ctx.logger?.info?.(line);
+      else ctx.logger?.warn?.(line);
     } catch {
     }
-  })();
+  };
+  try {
+    register({
+      kind: "exact",
+      path: "/api/voice/asr",
+      handler: async (req, res) => {
+        if (!voiceConfig.voiceAsrEnabled) {
+          voiceAsrLog("disabled");
+          json(res, 200, { text: "" });
+          return;
+        }
+        try {
+          const bytes = await readRawBody(req);
+          if (!checkVoiceWaveBounds(bytes)) {
+            voiceAsrLog("rejected");
+            json(res, 200, { text: "" });
+            return;
+          }
+          let svc = null;
+          try {
+            svc = ctx.get?.("speechToText") ?? null;
+          } catch {
+            svc = null;
+          }
+          if (!svc || typeof svc.resolve !== "function" || typeof svc.transcribe !== "function") {
+            voiceAsrLog("unavailable");
+            json(res, 200, { text: "" });
+            return;
+          }
+          const spec = svc.resolve({ audio: bytes, language: "zh" });
+          const { text } = await svc.transcribe(spec, AbortSignal.timeout(VOICE_ASR_TIMEOUT_MS));
+          json(res, 200, { text: typeof text === "string" ? text : "" });
+        } catch {
+          voiceAsrLog("failed");
+          json(res, 200, { text: "" });
+        }
+      }
+    });
+  } catch (err) {
+    try {
+      ctx.logger?.warn?.("[dsh-worktable] /api/voice/asr \u6CE8\u518C\u5931\u8D25\uFF08\u5DF2\u8DF3\u8FC7\uFF1B\u4E0D\u5F71\u54CD\u63D2\u4EF6\u52A0\u8F7D\uFF09\uFF1A" + String(err?.message || err));
+    } catch {
+    }
+  }
   register({
     kind: "exact",
     path: "/api/worktable/workspaces",
@@ -1192,6 +1213,9 @@ function apply(ctx) {
 export {
   HEALTH_PATH,
   LEGACY_VOICE_WARNING,
+  VOICE_ASR_MAX_BYTES,
+  VOICE_ASR_REASONS,
+  VOICE_ASR_TIMEOUT_MS,
   VOICE_CHECK_CONCLUSIONS,
   VOICE_CHECK_FIELDS,
   VOICE_CONFIG_ERRORS,
@@ -1199,6 +1223,7 @@ export {
   apply,
   buildCheckPayload,
   catalogCandidates,
+  checkVoiceWaveBounds,
   detectLegacyLoaded,
   firstReadable,
   inject,
@@ -1211,6 +1236,7 @@ export {
   stripYamlLineComment,
   textMentionsLegacy,
   textMentionsLegacyEntry,
+  voiceAsrLogLine,
   voiceConfigInvalidWarning,
   withFileLock,
   writeFileAtomic

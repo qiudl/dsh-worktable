@@ -381,6 +381,45 @@ export function voiceConfigInvalidWarning(error: string): string {
     '）→ voiceAsrEnabled 已按默认 true 生效；请修正该文件（或删掉它走默认）'
 }
 
+/* ── F2 本地转写桥（REQ-20261008-0010）─────────────────────────────────────
+ * duet 桌面云桥不可用时回落到 `POST /api/voice/asr`（M0 实测：20s 内 5+ 次命中，
+ * `audio/wav` + `x-voice-mode: duet`）→ 本桥把该 WAV 直接交给宿主本地 `speechToText`
+ * （`resolve` → `transcribe`），**只转发不落盘**：不写文件、不记正文、不上云。
+ * 失败/超时/停用一律回 `200 {"text":""}`，让 duet 侧保持 `unavailable`（显式失败、
+ * 不编造）——**绝不**回 5xx 让 duet 抛异常（PRD §3.2 F2）。
+ * ─────────────────────────────────────────────────────────────────────── */
+
+/** 桥内单段上限：与官方 `api-speech-to-text` 的 `maxAudioBytes` 默认值一致（4MiB）。 */
+export const VOICE_ASR_MAX_BYTES = 4 * 1024 * 1024
+/** 桥内转写超时：duet fetch 上限 20s，桥内取 ≤15s（PRD §3.2 F2 / §5.1）。 */
+export const VOICE_ASR_TIMEOUT_MS = 15000
+/** 桥回空文本的原因短枚举（日志只回这个，**不含音频内容 / 不含路径**）。 */
+export const VOICE_ASR_REASONS = ['disabled', 'rejected', 'unavailable', 'failed'] as const
+export type VoiceAsrReason = typeof VOICE_ASR_REASONS[number]
+
+/** 桥的上限判定（沿用官方 `validateWave` 的**大小**语义）：
+ *  - 必须 `byteLength > 44`（WAV 头 44B；与 duet 渲染侧 `parseDshVoiceRequest` 同口径）；
+ *  - 必须 `byteLength ≤ maxBytes`（默认 4MiB，同官方 `maxAudioBytes`）。
+ *  头部规范性与 120s 时长由 provider 的 `validateWave` 负责——那类非法音频会在
+ *  `transcribe` 里抛错、同样落到「识别为空」，故这里**不**重复校验头，
+ *  以免把 duet 的合法音频误判成空文本（那会让桥变死代码）。 */
+export function checkVoiceWaveBounds(bytes: unknown, maxBytes: number = VOICE_ASR_MAX_BYTES): boolean {
+  const n = (bytes as { byteLength?: unknown } | null | undefined)?.byteLength
+  return typeof n === 'number' && Number.isFinite(n) && n > 44 && n <= maxBytes
+}
+
+/** 桥的宿主日志行（一行、固定文案 + 短枚举；**不含音频内容/字节数/路径**）。 */
+export function voiceAsrLogLine(reason: VoiceAsrReason | string): string {
+  return '[dsh-worktable] /api/voice/asr 本地转写桥：' + reason + '（返回空文本；音频不落盘）'
+}
+
+/** 读原始请求体：桥的载荷是 WAV 字节（**不是** JSON，不能用 readJsonBody）。 */
+async function readRawBody(req: any): Promise<Uint8Array> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+  return new Uint8Array(Buffer.concat(chunks))
+}
+
 /** 进程内按文件路径串行化：同一路径的「读—改—写」排队执行（CR-23118 ②：防并发丢更新）。
  *  - 前一个任务失败也继续跑下一个（队列不因单次失败卡死）；
  *  - 调用方拿到自己那次任务的真实结果/异常；队列尾只存吞掉异常的空链，避免 unhandled rejection。 */
@@ -1009,45 +1048,52 @@ export function apply(ctx: Context) {
     },
   })
 
-  // === M0 临时探针（REQ-20261008-0010；M0 判定后回滚）===
-  // 桌面云桥只在 Slark 渲染进程里、且无 devtools 入口 → 无法直接取 errorCode。
-  // 改用间接判定：① 计数桩 /api/voice/asr（duet 若命中 ⇒ 桥回落了）；② 宿主进程内探 speechToText 可取性。
-  // 只写文件产物，便于无 cookie 复核。**不落音频、不记正文。**
-  register({
-    kind: 'exact',
-    path: '/api/voice/asr',
-    handler: async (req: any, res: any) => {
-      try {
-        const f = pathResolve(resolveDshHomeSafe(), 'logs', 'm0-voice-probe.json')
-        let d: any = {}
-        try { d = JSON.parse(await readFile(f, 'utf8')) } catch { d = {} }
-        d.hits = (Number(d.hits) || 0) + 1
-        d.firstAt = d.firstAt || new Date().toISOString()
-        d.lastAt = new Date().toISOString()
-        d.lastContentType = String(req?.headers?.['content-type'] || '')
-        d.lastVoiceMode = String(req?.headers?.['x-voice-mode'] || '')
-        const fsxProbe = await import('node:fs/promises')
-        await fsxProbe.writeFile(f, JSON.stringify(d, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
-        json(res, 200, { text: '' })
-      } catch (err) { json(res, 500, { error: String(err) }) }
-    },
-  })
-  void (async () => {
+  // === F2 本地转写桥（REQ-20261008-0010；替换 M0 探针桩，路径不变）===
+  // duet 桌面云桥回落时打 POST /api/voice/asr（M0 实测命中）→ 交给宿主本地 speechToText。
+  // 只转发不落盘：不写文件、不记正文、不上云；失败/超时/停用一律 200 {"text":""}。
+  // 注册包 try/catch：duplicate exact route 等情况**不得让插件 fiber 加载失败**（F5 fail-soft），
+  // 失败只记一行日志。
+  const voiceAsrLog = (reason: VoiceAsrReason) => {
     try {
-      const svc: any = ctx.get('speechToText')
-      const out = {
-        time: new Date().toISOString(),
-        speechToTextAvailable: !!svc,
-        speechToTextType: typeof svc,
-        hasTranscribe: typeof svc?.transcribe === 'function',
-        hasResolve: typeof svc?.resolve === 'function',
-        probeVersion: 'm0-1',
-      }
-      const fsxProbe = await import('node:fs/promises')
-      await fsxProbe.writeFile(pathResolve(resolveDshHomeSafe(), 'logs', 'm0-probe.json'),
-        JSON.stringify(out, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
-    } catch { /* 探针失败静默：不影响插件加载 */ }
-  })()
+      // 停用是**预期的配置态** → info（不是告警）；拒绝/不可用/失败 → warn。
+      const line = voiceAsrLogLine(reason)
+      if (reason === 'disabled') ctx.logger?.info?.(line)
+      else ctx.logger?.warn?.(line)
+    } catch { /* 日志失败忽略 */ }
+  }
+  try {
+    register({
+      kind: 'exact',
+      path: '/api/voice/asr',
+      handler: async (req: any, res: any) => {
+        // F5 开关（启动时快照）：停用 → 不调用识别，直接空文本 + 一行日志。
+        if (!voiceConfig.voiceAsrEnabled) { voiceAsrLog('disabled'); json(res, 200, { text: '' }); return }
+        try {
+          const bytes = await readRawBody(req)
+          // 上限/非法 → 按「识别为空」处理（**不抛给 duet 变成 500**），只留一行日志。
+          if (!checkVoiceWaveBounds(bytes)) { voiceAsrLog('rejected'); json(res, 200, { text: '' }); return }
+          let svc: any = null
+          try { svc = ctx.get?.('speechToText') ?? null } catch { svc = null }
+          if (!svc || typeof svc.resolve !== 'function' || typeof svc.transcribe !== 'function') {
+            voiceAsrLog('unavailable'); json(res, 200, { text: '' }); return
+          }
+          const spec = svc.resolve({ audio: bytes, language: 'zh' })            // 同步，返回 {provider,audio,language}
+          const { text } = await svc.transcribe(spec, AbortSignal.timeout(VOICE_ASR_TIMEOUT_MS))  // signal 必传
+          json(res, 200, { text: typeof text === 'string' ? text : '' })        // 空识别 → ""（不编造）
+        } catch {
+          // 失败 / 超时 / 服务不可用 → 空文本（duet 侧保持 unavailable：显式失败、不编造）。
+          voiceAsrLog('failed')
+          json(res, 200, { text: '' })
+        }
+      },
+    })
+  } catch (err) {
+    // 注册失败（如 duplicate exact route）只记一行：不影响插件 fiber 加载。
+    try {
+      ctx.logger?.warn?.('[dsh-worktable] /api/voice/asr 注册失败（已跳过；不影响插件加载）：' +
+        String((err as any)?.message || err))
+    } catch { /* 日志失败忽略 */ }
+  }
 
   // 工作区列表（自定义窗口会话分组用）：
   // 优先走宿主正式服务 ctx.workspaceRegistry（0.1.1/0.1.2 均有，正确感知 DSH_HOME 与存储后端）；

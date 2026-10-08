@@ -50,6 +50,7 @@ const {
   buildCheckPayload, pickVoiceCheckFields, VOICE_CHECK_FIELDS, VOICE_CHECK_CONCLUSIONS, LEGACY_VOICE_WARNING,
   catalogCandidates, patchCandidates, firstReadable, parseVoiceConfig, VOICE_CONFIG_ERRORS,
   voiceConfigInvalidWarning, normalizeDraftTake, withFileLock, writeFileAtomic,
+  checkVoiceWaveBounds, VOICE_ASR_MAX_BYTES, VOICE_ASR_TIMEOUT_MS, VOICE_ASR_REASONS, voiceAsrLogLine,
 } = mod
 
 /* ── 匹配规则 ─────────────────────────────────────────────────────────────── */
@@ -495,6 +496,235 @@ test('corrected/learn/draftTake 并发不互相覆盖（同一串行队列）', 
   assert.equal(Number(after.content.stats.draftTakes) - n0, 5, 'draftTake 5 次全部记上')
   assert.equal(Number(after.content.stats.corrected['彦梅']) - c0, 5, 'corrected 5 次全部记上（未被 draftTake 覆盖）')
   assert.ok(after.content.terms.includes('彦梅'), 'learn 与并发计数并存')
+})
+
+/* ── F2 本地转写桥（REQ-20261008-0010）：替换 M0 探针桩 ─────────────────────── */
+
+/** 造一段「够大」的假 WAV（桥只判大小：>44B 且 ≤4MiB；头部规范性由 provider 的 validateWave 管） */
+function fakeWav(n) {
+  const b = Buffer.alloc(Math.max(n, 0))
+  if (b.length >= 44) {
+    b.write('RIFF', 0, 'ascii'); b.writeUInt32LE(b.length - 8, 4)
+    b.write('WAVE', 8, 'ascii'); b.write('fmt ', 12, 'ascii')
+    b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22)
+    b.writeUInt32LE(16000, 24); b.writeUInt32LE(32000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34)
+    b.write('data', 36, 'ascii'); b.writeUInt32LE(b.length - 44, 40)
+  }
+  return b
+}
+
+/** 假 speechToText：记录 resolve/transcribe 调用，便于断言「不得调用」 */
+function fakeSpeech({ text = '今天天气不错', mode = 'ok' } = {}) {
+  const calls = { resolve: 0, transcribe: 0, spec: null, signal: null, audioBytes: -1 }
+  const svc = {
+    resolve: (request) => {
+      calls.resolve += 1
+      calls.audioBytes = request?.audio?.byteLength
+      calls.spec = { provider: { info: { id: 'fake' } }, audio: request?.audio, language: request?.language }
+      return calls.spec
+    },
+    transcribe: async (spec, signal) => {
+      calls.transcribe += 1
+      calls.signal = signal
+      if (mode === 'throw') throw new Error('boom')
+      return mode === 'undefined' ? undefined : { text }
+    },
+  }
+  return { svc, calls }
+}
+
+/** 带 speechToText 的 ctx（makeCtx 不注入该服务）；register 抛错时用于 fail-soft 用例。
+ *  info + warn 都收进同一个数组（停用态走 info，其余走 warn，断言只看"留了一行"）。 */
+function makeVoiceCtx(routes, warns, { speechToText = null, registerThrows = false } = {}) {
+  const ctx = {
+    logger: { info: (m) => warns.push(String(m)), debug() {}, warn: (m) => warns.push(String(m)) },
+    get: (n) => (n === 'loader' ? { entries: () => [][Symbol.iterator]() }
+      : n === 'connection' ? { requestRejection: () => undefined }
+        : n === 'speechToText' ? speechToText : null),
+    on() {}, effect() {},
+  }
+  ctx.webServer = {
+    register: (r) => {
+      // 只为 ASR 桥模拟 duplicate exact route；其它路由照常注册（保证 fiber 其余部分可比对）
+      if (registerThrows && r.path === '/api/voice/asr') throw new Error('duplicate exact route: ' + r.path)
+      routes.set(r.path, r)
+    },
+  }
+  return ctx
+}
+
+/** 调 ASR 桥：载荷是**原始 WAV 字节**（不是 JSON）；可选带上游头 */
+function callAsr(routes, bytes, { headers = { 'content-type': 'audio/wav', 'x-voice-mode': 'duet' } } = {}) {
+  return new Promise((resolve) => {
+    const res = {
+      status: 0, headers: null, text: '',
+      writeHead(s, h) { this.status = s; this.headers = h },
+      end(b) { this.text = b == null ? '' : String(b); resolve(this) },
+    }
+    const req = {
+      method: 'POST', url: '/api/voice/asr', headers,
+      async *[Symbol.asyncIterator]() { if (bytes != null) yield Buffer.from(bytes) },
+    }
+    routes.get('/api/voice/asr').handler(req, res)
+  })
+}
+
+const ASR = '/api/voice/asr'
+const CFG_FILE = join(TMP_HOME, 'worktable-voice.json')
+const M0_VOICE = join(TMP_HOME, 'logs', 'm0-voice-probe.json')
+const M0_AVAIL = join(TMP_HOME, 'logs', 'm0-probe.json')
+
+test('checkVoiceWaveBounds: >44B 且 ≤4MiB（官方 validateWave 的大小语义）', () => {
+  assert.equal(VOICE_ASR_MAX_BYTES, 4 * 1024 * 1024)
+  assert.equal(VOICE_ASR_TIMEOUT_MS, 15000, '桥内超时 ≤15s')
+  assert.equal(checkVoiceWaveBounds(fakeWav(44)), false, '恰好 44B（只有头）→ 非法')
+  assert.equal(checkVoiceWaveBounds(fakeWav(45)), true)
+  assert.equal(checkVoiceWaveBounds(fakeWav(VOICE_ASR_MAX_BYTES)), true, '恰好 4MiB → 允许')
+  assert.equal(checkVoiceWaveBounds(fakeWav(VOICE_ASR_MAX_BYTES + 1)), false, '>4MiB → 拒绝')
+  assert.equal(checkVoiceWaveBounds(fakeWav(45), 64), true, '小阈值注入：45 ≤ 64')
+  assert.equal(checkVoiceWaveBounds(fakeWav(65), 64), false, '小阈值注入：65 > 64')
+  assert.equal(checkVoiceWaveBounds(fakeWav(65), 44), false)
+  for (const bad of [null, undefined, 42, 'x', {}, [], new ArrayBuffer(0)]) {
+    assert.equal(checkVoiceWaveBounds(bad), false, String(bad))
+  }
+})
+
+test('voiceAsrLogLine: 固定文案 + 短枚举，不含音频内容/路径', () => {
+  assert.deepEqual([...VOICE_ASR_REASONS], ['disabled', 'rejected', 'unavailable', 'failed'])
+  for (const r of VOICE_ASR_REASONS) {
+    const line = voiceAsrLogLine(r)
+    assert.ok(line.includes(r), line)
+    assert.ok(line.includes('/api/voice/asr'), line)
+  }
+  assert.equal(/\/Users\/|\/private\/|\/tmp\//.test(voiceAsrLogLine('failed')), false, '日志不得含绝对路径')
+})
+
+test('F2 桥：正常 → 200 且文本一致；resolve 带 {audio, language:zh}；signal 必传', async () => {
+  const routes = new Map(); const warns = []
+  const { svc, calls } = fakeSpeech()
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }))
+  const wav = fakeWav(1200)
+  const r = await callAsr(routes, wav)
+  assert.equal(r.status, 200)
+  assert.deepEqual(JSON.parse(r.text), { text: '今天天气不错' })
+  assert.equal(calls.resolve, 1, 'resolve 必须调用一次')
+  assert.equal(calls.transcribe, 1, 'transcribe 必须调用一次')
+  assert.equal(calls.spec.language, 'zh', 'language 固定 zh')
+  assert.equal(calls.audioBytes, wav.length, 'WAV 字节原样交给 resolve')
+  assert.ok(calls.signal instanceof AbortSignal, 'transcribe 的第二参必须是 AbortSignal')
+})
+
+test('F2 桥：transcribe 抛错 / 返回空 / 返回非字符串 → 一律 200 {"text":""}', async () => {
+  for (const [mode, text, label] of [
+    ['throw', undefined, '抛错（超时/服务不可用同类）'],
+    ['ok', '', '空识别'],
+    ['ok', 42, '非字符串'],
+    ['undefined', undefined, 'transcribe 返回 undefined'],
+  ]) {
+    const routes = new Map(); const warns = []
+    const { svc, calls } = fakeSpeech({ mode, text })
+    mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }))
+    const r = await callAsr(routes, fakeWav(200))
+    assert.equal(r.status, 200, label + '：不得 5xx（duet 侧会抛异常）')
+    assert.deepEqual(JSON.parse(r.text), { text: '' }, label)
+    assert.equal(calls.transcribe, 1, label + '：已调用识别但结果被规整为空')
+  }
+
+  // 纯空白是**字符串**，按 PRD 指定的实现式 `typeof text === 'string' ? text : ''` **原样透传**
+  // （只有非字符串才归零）。此处如实固定该语义，避免以后被"顺手 trim"改成另一种契约。
+  const routes = new Map(); const warns = []
+  const { svc } = fakeSpeech({ text: '   ' })
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }))
+  assert.deepEqual(JSON.parse((await callAsr(routes, fakeWav(200))).text), { text: '   ' })
+})
+
+test('F2 桥：speechToText 不可取 → 200 {"text":""}（不 500、不编造）', async () => {
+  const routes = new Map(); const warns = []
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: null }))
+  const r = await callAsr(routes, fakeWav(200))
+  assert.equal(r.status, 200)
+  assert.deepEqual(JSON.parse(r.text), { text: '' })
+  assert.ok(warns.some((w) => w.includes('/api/voice/asr') && w.includes('unavailable')), JSON.stringify(warns))
+})
+
+test('F2 桥：超大体（>4MiB）→ 200 {"text":""} 且**不调用** transcribe', async () => {
+  const routes = new Map(); const warns = []
+  const { svc, calls } = fakeSpeech()
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }))
+  const r = await callAsr(routes, fakeWav(VOICE_ASR_MAX_BYTES + 1))
+  assert.equal(r.status, 200)
+  assert.deepEqual(JSON.parse(r.text), { text: '' })
+  assert.equal(calls.transcribe, 0, '超限不得调用 transcribe')
+  assert.equal(calls.resolve, 0, '超限不得调用 resolve')
+  assert.ok(warns.some((w) => w.includes('rejected')), JSON.stringify(warns))
+
+  // 反向对照：恰好 4MiB 仍会尝试识别（证明拒绝的是"超限"而不是"大文件一律拒"）
+  const r2 = await callAsr(routes, fakeWav(VOICE_ASR_MAX_BYTES))
+  assert.equal(r2.status, 200)
+  assert.deepEqual(JSON.parse(r2.text), { text: '今天天气不错' })
+  assert.equal(calls.transcribe, 1)
+
+  // 恰好 44B（只有头）→ 非法，同样不调用
+  const r3 = await callAsr(routes, fakeWav(44))
+  assert.equal(r3.status, 200)
+  assert.deepEqual(JSON.parse(r3.text), { text: '' })
+  assert.equal(calls.transcribe, 1, '44B 不得调用 transcribe')
+})
+
+test('F2 桥：voiceAsrEnabled:false → 不调用识别，200 {"text":""} + 一行日志', async () => {
+  writeFileSync(CFG_FILE, JSON.stringify({ voiceAsrEnabled: false }))
+  try {
+    const routes = new Map(); const warns = []
+    const { svc, calls } = fakeSpeech()
+    mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }))
+    const r = await callAsr(routes, fakeWav(500))
+    assert.equal(r.status, 200)
+    assert.deepEqual(JSON.parse(r.text), { text: '' })
+    assert.equal(calls.transcribe, 0, '停用后不得调用 transcribe')
+    assert.equal(calls.resolve, 0, '停用后不得调用 resolve')
+    assert.ok(warns.some((w) => w.includes('disabled')), JSON.stringify(warns))
+    // 控制组：开关打开（缺文件 = 默认 true）时同一载荷会调用识别
+    rmSync(CFG_FILE, { force: true })
+    const routes2 = new Map(); const warns2 = []
+    const s2 = fakeSpeech()
+    mod.apply(makeVoiceCtx(routes2, warns2, { speechToText: s2.svc }))
+    const r2 = await callAsr(routes2, fakeWav(500))
+    assert.deepEqual(JSON.parse(r2.text), { text: '今天天气不错' })
+    assert.equal(s2.calls.transcribe, 1)
+  } finally { rmSync(CFG_FILE, { force: true }) }
+})
+
+test('F2 桥：注册失败（duplicate exact route）→ 插件加载不受影响，只记一行日志', () => {
+  const routes = new Map(); const warns = []
+  assert.doesNotThrow(() => mod.apply(makeVoiceCtx(routes, warns, { registerThrows: true })))
+  assert.equal(routes.has(ASR), false, '注册抛错时该路由不在表里')
+  const w = warns.join('\n')
+  assert.ok(w.includes('/api/voice/asr') && w.includes('注册失败'), '必须留一行注册失败日志：' + w)
+  assert.ok(routes.has('/api/worktable/health'), '后续路由仍须注册（fiber 未挂）')
+})
+
+test('F2 桥：只转发不落盘 —— 不再产生 M0 探针产物', async () => {
+  rmSync(M0_VOICE, { force: true }); rmSync(M0_AVAIL, { force: true })
+  const routes = new Map(); const warns = []
+  const { svc } = fakeSpeech()
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }))
+  for (const n of [200, 5000]) assert.equal((await callAsr(routes, fakeWav(n))).status, 200)
+  await callAsr(routes, fakeWav(VOICE_ASR_MAX_BYTES + 1))
+  await sleep(200)   // 老探针是 fire-and-forget 的异步写，等一拍再断言
+  assert.equal(existsSync(M0_VOICE), false, '不得再写 logs/m0-voice-probe.json（M0 计数逻辑已移除）')
+  assert.equal(existsSync(M0_AVAIL), false, '不得再写 logs/m0-probe.json（M0 可取性逻辑已移除）')
+  // 日志里不得出现音频内容（只允许短枚举 + 固定文件名）
+  assert.equal(warns.some((w) => w.includes('今天天气不错')), false, '日志不得含识别正文')
+})
+
+test('构建产物 lib/index.js：含正式桥标记，不含 M0 探针产物路径', () => {
+  const lib = fileURLToPath(new URL('../01_content/lib/index.js', import.meta.url))
+  const text = readFileSync(lib, 'utf8')
+  assert.ok(text.includes('path: "/api/voice/asr"'), '必须仍注册该 exact 路径')
+  assert.ok(text.includes('speechToText'))
+  assert.ok(text.includes('AbortSignal.timeout('), '桥内转写必须带超时 signal')
+  assert.equal(text.includes('m0-voice-probe'), false, 'M0 计数桩必须已移除')
+  assert.equal(text.includes('m0-probe.json'), false, 'M0 可取性写入必须已移除')
 })
 
 // 自检的「第二趟」（apply 里 1.5s 后补跑）会在这之后写盘，故先等它跑完再清临时 DSH_HOME
