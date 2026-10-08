@@ -8,3 +8,6 @@ Thumbs.db
 
 
 dist/
+
+# 测试副作用目录（server-home.test.mjs 在 CWD 留下；勿提交、勿扫进发布分支）
+__wt_probe_rel__/
