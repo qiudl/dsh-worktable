@@ -695,6 +695,32 @@ function apply(ctx) {
   });
   register({
     kind: "exact",
+    path: "/api/worktable/now",
+    handler: (_req, res) => {
+      const n = /* @__PURE__ */ new Date();
+      const pad2 = (v) => String(v).padStart(2, "0");
+      const wd = ["\u65E5", "\u4E00", "\u4E8C", "\u4E09", "\u56DB", "\u4E94", "\u516D"][n.getDay()];
+      const off = -n.getTimezoneOffset();
+      const tz = `UTC${off >= 0 ? "+" : "-"}${pad2(Math.floor(Math.abs(off) / 60))}:${pad2(Math.abs(off) % 60)}`;
+      let tzName = "";
+      try {
+        tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch {
+        tzName = "";
+      }
+      json(res, 200, {
+        epoch: n.getTime(),
+        iso: n.toISOString(),
+        date: `${n.getFullYear()}-${pad2(n.getMonth() + 1)}-${pad2(n.getDate())}`,
+        time: `${pad2(n.getHours())}:${pad2(n.getMinutes())}`,
+        weekday: "\u661F\u671F" + wd,
+        tz,
+        tzName
+      });
+    }
+  });
+  register({
+    kind: "exact",
     path: "/api/worktable/workspaces",
     handler: async (_req, res) => {
       try {

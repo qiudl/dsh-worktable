@@ -590,6 +590,32 @@ export function apply(ctx: Context) {
     },
   })
 
+  // 公共级时间事实（REQ-20261008-0006 的 F3）：日期/星期/时区由**宿主**给出，不靠模型猜。
+  // 与 duet 的 clockLine 同源思路；本路由让页面/agent 都取同一份权威时间。
+  // 与其它路由一致，经 guarded() 鉴权。
+  register({
+    kind: 'exact',
+    path: '/api/worktable/now',
+    handler: (_req: any, res: any) => {
+      const n = new Date()
+      const pad2 = (v: number) => String(v).padStart(2, '0')
+      const wd = ['日', '一', '二', '三', '四', '五', '六'][n.getDay()]
+      const off = -n.getTimezoneOffset()
+      const tz = `UTC${off >= 0 ? '+' : '-'}${pad2(Math.floor(Math.abs(off) / 60))}:${pad2(Math.abs(off) % 60)}`
+      let tzName = ''
+      try { tzName = Intl.DateTimeFormat().resolvedOptions().timeZone } catch { tzName = '' }
+      json(res, 200, {
+        epoch: n.getTime(),
+        iso: n.toISOString(),
+        date: `${n.getFullYear()}-${pad2(n.getMonth() + 1)}-${pad2(n.getDate())}`,
+        time: `${pad2(n.getHours())}:${pad2(n.getMinutes())}`,
+        weekday: '星期' + wd,
+        tz,
+        tzName,
+      })
+    },
+  })
+
   // 工作区列表（自定义窗口会话分组用）：
   // 优先走宿主正式服务 ctx.workspaceRegistry（0.1.1/0.1.2 均有，正确感知 DSH_HOME 与存储后端）；
   // 不可用时回退按 resolveDshHomeSafe() 读 storages/workspace.json（只读）。
