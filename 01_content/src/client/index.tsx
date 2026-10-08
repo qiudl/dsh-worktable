@@ -2325,10 +2325,16 @@ function buildCustomLayoutPrompt(req: string): string {
     if (!folderPath) { setWsFolderError(true); return }
     if (!isAbs(folderPath)) { setWsFolderError(true); return }
     try {
+      // 新建工作区 = 用户显式声明「此目录就是项目文件夹」：必须先上报为可写根，再建目录。
+      // 顺序不可交换：服务端的写入根白名单只由**已存在项目**的文件夹上报，新项目在保存成功前
+      // 不在白名单里，先 mkdir 必被 403（outside project folders）拒绝 → 新建项目死锁。
+      try {
+        await fetch('/api/worktable/roots', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ folders: [folderPath] }) })
+      } catch { /* 上报失败不阻断：目标已在白名单内时 mkdir 仍可能成功 */ }
       // 兜底建目录；HTTP 非 2xx 视为失败，不能继续保存（路径可能无效）
       const r = await fetch('/api/worktable/mkdir', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: folderPath }) })
-      if (!r.ok) { setWsFolderError(true); setPickErr((prev) => ({ ...prev, add: t('add.folderCreateFail') })); return }
-    } catch { setWsFolderError(true); setPickErr((prev) => ({ ...prev, add: t('add.folderCreateFail') })); return }
+      if (!r.ok) { setPickErr((prev) => ({ ...prev, add: t('add.folderCreateFail') })); return }
+    } catch { setPickErr((prev) => ({ ...prev, add: t('add.folderCreateFail') })); return }
     const layout = buildLayout(wsPreset, name)
     persistProjects((prev) => ({ ...prev, layouts: [...prev.layouts, layout], folders: { ...prev.folders, [layout.id]: folderPath } }))
     invalidatePickState() // 保存成功：失效在途选择请求（防止旧选择器稍后返回写回已重置的表单）
