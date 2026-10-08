@@ -633,6 +633,66 @@ function apply(ctx) {
       json(res, 200, { cloudState: await readLocalConfigField("local.json", "cloudStatePath") });
     }
   });
+  const USER_MEMORY_FILES = ["speech.json", "facts.json", "procedures.json"];
+  register({
+    kind: "exact",
+    path: "/api/worktable/user-memory",
+    handler: async (req, res) => {
+      try {
+        const u = new URL(req.url ?? "/", "http://dsh.internal");
+        const name2 = u.searchParams.get("name") || "speech.json";
+        if (!USER_MEMORY_FILES.includes(name2)) {
+          json(res, 403, { error: "name not allowed" });
+          return;
+        }
+        const file = pathResolve(resolveDshHomeSafe(), "memory", "user", name2);
+        if (req.method === "GET") {
+          try {
+            const raw = await readFile(file, "utf8");
+            json(res, 200, { name: name2, path: file, exists: true, content: JSON.parse(raw) });
+          } catch (err) {
+            json(res, 200, { name: name2, path: file, exists: false, error: String(err) });
+          }
+          return;
+        }
+        if (req.method === "POST") {
+          const body = await readJsonBody(req);
+          const delta = body && typeof body.corrected === "object" && body.corrected ? body.corrected : null;
+          if (!delta) {
+            json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}}' });
+            return;
+          }
+          let doc = null;
+          try {
+            doc = JSON.parse(await readFile(file, "utf8"));
+          } catch {
+          }
+          if (!doc || typeof doc !== "object") {
+            json(res, 404, { error: "user memory file missing or unreadable" });
+            return;
+          }
+          doc.stats = doc.stats && typeof doc.stats === "object" ? doc.stats : {};
+          doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === "object" ? doc.stats.corrected : {};
+          let added = 0;
+          for (const [k, v] of Object.entries(delta)) {
+            const n = Math.max(0, Math.min(1e3, Math.floor(Number(v) || 0)));
+            if (!n) continue;
+            doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n;
+            added += n;
+          }
+          doc.savedAt = Date.now();
+          const fsx = await import("node:fs/promises");
+          await fsx.writeFile(file, JSON.stringify(doc, null, 2) + "\n", { encoding: "utf8", mode: 384 });
+          json(res, 200, { ok: true, added, corrected: doc.stats.corrected });
+          return;
+        }
+        res.writeHead(405);
+        res.end();
+      } catch (err) {
+        json(res, 500, { error: String(err) });
+      }
+    }
+  });
   register({
     kind: "exact",
     path: "/api/worktable/workspaces",

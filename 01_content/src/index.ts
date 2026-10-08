@@ -536,6 +536,60 @@ export function apply(ctx: Context) {
     },
   })
 
+  // 用户级记忆（语音术语表等）：给工作台页面用 —— 页面读不到 DSH_HOME（不能把 profile 路径写死在页面里，
+  // 见 REQ-20261008-0006 缺陷 #9），故由插件按 DSH_HOME 解析后提供。
+  // 只允许白名单文件名；GET 读；POST 只接受一种写入：记一次纠错 {"corrected":{"<错误写法>":<n>}}。
+  // 本路由与其它路由一样经 guarded() 鉴权（cookie + Host/Origin 围栏）。
+  const USER_MEMORY_FILES = ['speech.json', 'facts.json', 'procedures.json']
+  register({
+    kind: 'exact',
+    path: '/api/worktable/user-memory',
+    handler: async (req: any, res: any) => {
+      try {
+        const u = new URL(req.url ?? '/', 'http://dsh.internal')
+        const name = u.searchParams.get('name') || 'speech.json'
+        if (!USER_MEMORY_FILES.includes(name)) { json(res, 403, { error: 'name not allowed' }); return }
+        const file = pathResolve(resolveDshHomeSafe(), 'memory', 'user', name)
+
+        if (req.method === 'GET') {
+          try {
+            const raw = await readFile(file, 'utf8')
+            json(res, 200, { name, path: file, exists: true, content: JSON.parse(raw) })
+          } catch (err) {
+            // 文件不存在不算错误：页面据此提示"术语表还没建"
+            json(res, 200, { name, path: file, exists: false, error: String(err) })
+          }
+          return
+        }
+
+        if (req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const delta = body && typeof body.corrected === 'object' && body.corrected ? body.corrected : null
+          if (!delta) { json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}}' }); return }
+          let doc: any = null
+          try { doc = JSON.parse(await readFile(file, 'utf8')) } catch { /* 见下 */ }
+          if (!doc || typeof doc !== 'object') { json(res, 404, { error: 'user memory file missing or unreadable' }); return }
+          doc.stats = doc.stats && typeof doc.stats === 'object' ? doc.stats : {}
+          doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === 'object' ? doc.stats.corrected : {}
+          let added = 0
+          for (const [k, v] of Object.entries(delta as Record<string, unknown>)) {
+            const n = Math.max(0, Math.min(1000, Math.floor(Number(v) || 0)))
+            if (!n) continue
+            doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n
+            added += n
+          }
+          doc.savedAt = Date.now()
+          const fsx = await import('node:fs/promises')
+          await fsx.writeFile(file, JSON.stringify(doc, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+          json(res, 200, { ok: true, added, corrected: doc.stats.corrected })
+          return
+        }
+
+        res.writeHead(405); res.end()
+      } catch (err) { json(res, 500, { error: String(err) }) }
+    },
+  })
+
   // 工作区列表（自定义窗口会话分组用）：
   // 优先走宿主正式服务 ctx.workspaceRegistry（0.1.1/0.1.2 均有，正确感知 DSH_HOME 与存储后端）；
   // 不可用时回退按 resolveDshHomeSafe() 读 storages/workspace.json（只读）。
