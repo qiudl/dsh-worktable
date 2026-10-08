@@ -82,7 +82,12 @@ if (patchOk && (patchEntries[0].id !== IDENTITY || patchEntries[0].name !== IDEN
 if (!patchOk) process.exit(1)
 console.log('[release-prep] identity check passed (' + IDENTITY + ', cordis.patch.yml strict)')
 
-// ---------- 2. 构建 + 语法检查 ----------
+// ---------- 2. 会话/输入兼容回归 + 构建 + 语法检查 ----------
+const compatTests = ['host-input.test.mjs', 'session-compat.test.mjs', 'session-details.test.mjs', 'host-transport.test.mjs', 'widget-mount.test.mjs']
+  .map((file) => join(HERE, '..', '04_test', file))
+const compatRun = spawnSync(process.execPath, ['--test', ...compatTests], { cwd: HERE, stdio: 'inherit' })
+if (compatRun.status !== 0) { console.error('[release-prep] FAIL: session/input compatibility tests'); process.exit(1) }
+console.log('[release-prep] session/input compatibility tests passed (source contracts)')
 // 构建必带 cwd: HERE（脚本自身位置=01_content），否则从仓库根调用会输出到根 lib/ 造成旧包
 const build = spawnSync(process.execPath, [join(HERE, 'build.mjs')], { stdio: 'inherit', cwd: HERE })
 if (build.status !== 0) { console.error('[release-prep] FAIL: build failed'); process.exit(1) }
@@ -202,7 +207,7 @@ if (serverRun.status !== 0) {
   console.error(serverRun.stderr || serverRun.stdout)
   process.exit(1)
 }
-console.log('[release-prep] server home resolution tests passed (3 scenarios, on installed artifact)')
+console.log('[release-prep] server home resolution tests passed (4 scenarios, on installed artifact)')
 
 // ---------- 6. 双资产从同一已验证包复制 + SHA-256 ----------
 const outDir = join(HERE, 'dist', 'v' + VERSION)

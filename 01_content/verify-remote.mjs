@@ -26,7 +26,7 @@ function npmCliPath() {
   return c[0] ?? 'npm'
 }
 
-const REPO = 'Aisland-SJL/dsh-worktable'
+const REPO = 'qiudl/dsh-worktable'
 // 参数严格解析：--expect-sha <64位hex> [tag]；缺值/非 hex/重复参数/多余 tag 一律拒绝
 const args = process.argv.slice(2)
 let EXPECT_SHA = null

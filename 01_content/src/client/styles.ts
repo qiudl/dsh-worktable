@@ -81,6 +81,26 @@ export const css = xtermCss + '\n' + [
   '.dsh-wt_shortcutName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.dsh-wt_shortcutBadge{flex:none;font-size:9px;line-height:14px;padding:0 5px;border-radius:8px;background:var(--dsw-alias-fill-l1,rgba(255,255,255,.06));color:var(--dsw-alias-label-tertiary,#6e7683)}',
   // 项目区
+  '.dsh-wt_layoutWrap{display:flex;flex-direction:column;gap:3px;position:relative}',
+  '.dsh-wt_layoutHasNav .dsh-wt_layoutArrow{display:none}',
+  '.dsh-wt_subChevron{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--dsw-alias-label-tertiary,#6e7683);transition:transform .15s ease,color .15s ease}',
+  '.dsh-wt_layout[data-sub=true] .dsh-wt_subChevron{transform:translateY(-50%) rotate(90deg);color:var(--dsw-alias-state-accent-primary,#4f8ef7)}',
+  '.dsh-wt_subNav{display:flex;flex-direction:column;gap:2px;margin:0 0 4px 14px;padding-left:9px;border-left:1px solid var(--dsw-alias-border-l1,#262b36)}',
+  '.dsh-wt_subNavHead{padding:1px 8px 4px;font-size:10px;color:var(--dsw-alias-label-tertiary,#6e7683);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+  '.dsh-wt_subNavItem{display:block;width:100%;text-align:left;padding:5px 8px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#9aa4b2);font:inherit;font-size:11.5px;line-height:1.4;cursor:pointer}',
+  '.dsh-wt_subNavItem:hover{background:var(--dsw-alias-fill-l1,rgba(255,255,255,.06));color:var(--dsw-alias-label-primary,#e6e8eb)}',
+  '.dsh-wt_subNavItem[data-on=true]{color:var(--dsw-alias-label-primary,#e6e8eb);border-color:var(--dsw-alias-state-accent-primary,#4f8ef7);background:rgba(79,142,247,.10)}',
+  '.dsh-wt_subNavSep{height:1px;margin:3px 2px;background:var(--dsw-alias-border-l1,#262b36)}',
+  '.dsh-wt_subNavCfg{color:var(--dsw-alias-label-tertiary,#6e7683)}',
+  '.dsh-wt_cloudCard{margin:2px 0 8px;padding:8px 9px;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:8px;background:var(--dsw-alias-fill-l1,rgba(255,255,255,.02))}',
+  '.dsh-wt_cloudState{font-size:11px;color:var(--dsw-alias-label-secondary,#9aa4b2);margin-bottom:6px;word-break:break-all;line-height:1.5}',
+  '.dsh-wt_cloudBtns{display:flex;gap:6px}',
+  '.dsh-wt_cloudBtn{flex:1;padding:5px 8px;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11.5px;cursor:pointer}',
+  '.dsh-wt_cloudBtn:hover:not(:disabled){border-color:var(--dsw-alias-state-accent-primary,#4f8ef7)}',
+  '.dsh-wt_cloudBtn:disabled{opacity:.5;cursor:default}',
+  '.dsh-wt_cloudHint{margin-top:6px;font-size:11px;color:#3fb950;line-height:1.5}',
+  '.dsh-wt_cloudWarn{margin-top:6px;font-size:10.5px;color:#d29922;line-height:1.5;word-break:break-all}',
+  '.dsh-wt_cloudNote{margin-top:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary,#6e7683);line-height:1.5}',
   '.dsh-wt_projects{display:flex;flex-direction:column;gap:4px}',
   '.dsh-wt_projects[data-managing=true]{opacity:.55;pointer-events:none}',
   '.dsh-wt_empty{padding:8px 10px;border:1px dashed var(--dsw-alias-border-l1,#262b36);border-radius:8px;color:var(--dsw-alias-label-tertiary,#6e7683);font-size:11px;text-align:center}',
@@ -355,6 +375,14 @@ export const css = xtermCss + '\n' + [
   '.dsh-wt_browserInput{flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11px;line-height:16px}',
   '.dsh-wt_browserGo{flex:none;width:20px;height:20px;padding:0;border:none;border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary,#9aa4b2);font-size:12px;cursor:pointer}',
   '.dsh-wt_browserGo:hover{color:var(--dsw-alias-label-primary,#e6e8eb);background:var(--dsw-alias-fill-l1,rgba(255,255,255,.06))}',
+  '.dsh-wt_browserGo:disabled{opacity:.35;cursor:default}',
+  // iframe 承载层：缩放模式下 iframe 会比容器大（或小），由容器负责滚动/裁剪；
+  // 100% 档 iframe 仍是 100%×100% 绝对定位填满容器 → 与改动前视觉一致。
+  '.dsh-wt_frameWrap{flex:1;min-height:0;position:relative;overflow:auto;background:#010409}',
+  '.dsh-wt_frameWrap > .dsh-wt_paneFrame{position:absolute;top:0;left:0;right:auto;bottom:auto}',
+  '.dsh-wt_browserZoom{flex:none;height:20px;padding:0 2px;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:4px;background:var(--dsw-alias-fill-l1,rgba(255,255,255,.03));color:var(--dsw-alias-label-secondary,#9aa4b2);font:inherit;font-size:10px;line-height:16px;cursor:pointer}',
+  '.dsh-wt_browserTip{flex:none;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary,#6e7683)}',
+  '.dsh-wt_browserTipFail{color:var(--dsw-alias-state-error-primary,#f47067)}',
   '.dsh-wt_paneWip{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--dsw-alias-label-tertiary,#6e7683)}',
   '.dsh-wt_paneWipIcon{font-size:26px;line-height:30px}',
   '.dsh-wt_paneWipText{font-size:11px}',
@@ -407,6 +435,21 @@ export const css = xtermCss + '\n' + [
   '.dsh-wt_tabTitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.dsh-wt_tabClose{flex:none;width:14px;height:14px;padding:0;border:none;border-radius:3px;background:transparent;color:var(--dsw-alias-label-tertiary,#6e7683);font-size:9px;line-height:1;cursor:pointer}',
   '.dsh-wt_tabClose:hover{color:var(--dsw-alias-label-primary,#e6e8eb);background:var(--dsw-alias-fill-l1,rgba(255,255,255,.08))}',
+  // 标签保活包裹层：激活时 display:contents（不生成盒子，内容仍直接参与窗格 flex 布局，
+  // 与旧「只渲染激活标签」的盒模型一致）；非激活时 [hidden] 覆盖为 display:none。
+  // 两条都要写：[hidden] 是 UA 规则，作者侧的 display:contents 会盖过它。
+  '.dsh-wt_tabWrap{display:contents}',
+  '.dsh-wt_tabWrap[hidden]{display:none}',
+  // 标签栏「＋」追加标签 + 选择器下拉（fixed 避开 tabBar 的 overflow 裁剪；
+  // z-index 取 69：低于分栏标题栏 70、高于窗格 68）
+  '.dsh-wt_tabAdd{flex:none;width:18px;height:16px;padding:0;margin-bottom:2px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--dsw-alias-label-secondary,#9aa4b2);font-size:11px;line-height:1;cursor:pointer}',
+  '.dsh-wt_tabAdd:hover{color:var(--dsw-alias-label-primary,#e6e8eb);background:var(--dsw-alias-fill-l1,rgba(255,255,255,.08));border-color:var(--dsw-alias-border-l1,#262b36)}',
+  '.dsh-wt_tabAddPop{position:fixed;z-index:69;display:flex;flex-direction:column;box-sizing:border-box;width:200px;padding:4px;border:1px solid var(--dsw-alias-border-l2,#3a4150);border-radius:10px;background:var(--dsw-alias-bg-base,#0b0e14);box-shadow:var(--dsw-shadow-lv2,0 8px 24px rgba(0,0,0,.4))}',
+  '.dsh-wt_tabAddPopBody{display:flex;flex-direction:column;height:220px;min-height:0}',
+  // 下拉里复用窗格选择器：按钮收小，2 列 3 行放得下 5 个内置入口
+  '.dsh-wt_tabAddPop .dsh-wt_panePicker{padding:8px}',
+  '.dsh-wt_tabAddPop .dsh-wt_panePick{width:74px;height:58px;gap:3px;padding:4px;font-size:10px;line-height:13px}',
+  '.dsh-wt_tabAddPop .dsh-wt_panePick span{font-size:16px;line-height:18px}',
   // 树形资源管理器
   '.dsh-wt_treeRow{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;padding:3px 6px;border:none;border-radius:5px;background:transparent;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11px;line-height:16px;cursor:pointer;text-align:left}',
   '.dsh-wt_treeRow:hover{background:var(--dsw-alias-fill-l1,rgba(255,255,255,.05))}',
@@ -621,6 +664,7 @@ export const css = xtermCss + '\n' + [
   '.dsh-wt_consoleSelect,.dsh-wt_consoleInput{width:100%;box-sizing:border-box;padding:6px 8px;background:var(--dsw-alias-fill-l1,rgba(255,255,255,.03));border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:8px;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11.5px;line-height:16px;outline:none}',
   '.dsh-wt_consoleSelect:focus,.dsh-wt_consoleInput:focus{border-color:var(--dsw-alias-state-accent-primary,#4f8ef7)}',
   '.dsh-wt_consoleErr{margin:0;font-size:11px;line-height:16px;color:var(--dsw-alias-state-danger,#f85149)}',
+  '.dsh-wt_consoleHint{margin:0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#aab6cd)}',
   '.dsh-wt_consoleCreateBtn{margin-top:2px;padding:7px 10px;border:1px solid var(--dsw-alias-state-accent-primary,#4f8ef7);border-radius:8px;background:transparent;color:var(--dsw-alias-state-accent-primary,#4f8ef7);font:inherit;font-size:12px;line-height:18px;cursor:pointer}',
   '.dsh-wt_consoleCreateBtn:hover:not(:disabled){background:var(--dsw-alias-fill-l1,rgba(255,255,255,.05))}',
   '.dsh-wt_consoleCreateBtn:disabled{opacity:.55;cursor:default}',

@@ -32,8 +32,8 @@
 ### 🖥️ 控制室（内置默认项目）
 
 - 固定在首位的不可删除项目——首次打开绑定一条管理对话即可
-- 三列卡片网格实时镜像**每一个**项目的状态：工作中 / 待你决定 / 已完成，附带运行时长与清洗后的最近消息预览
-- 宿主会话快照的事件订阅镜像——**零轮询、零 Token**
+- 可调列数的卡片网格镜像可见项目的状态：工作中 / 待你决定 / 已完成，附带可用的运行时长与清洗后的最近消息预览
+- 宿主会话快照的事件订阅镜像；状态监控不调用模型
 - 玻璃拟态卡片、深色/白色/跟随系统主题、霓虹状态光效与工作中卡片的旋转彗星光点
 
 ---
@@ -44,27 +44,29 @@
 |---|------|
 | 🧩 插件类型 | Cordis 插件——服务端路由 + Web 客户端，纯增量（不替换任何官方插件） |
 | 🪟 工作区引擎 | 自研分栏引擎，渲染进宿主的 shell overlay 座位 |
-| 💬 对话窗 | 复用宿主对话——插件只做会话选择（sessions.open） |
+| 💬 对话窗 | 复用宿主对话，导航接宿主新版或旧版会话接口 |
 | 📡 状态数据 | 宿主会话运行时快照的镜像（订阅驱动） |
-| 💾 状态存储 | 仅 localStorage（dsh.worktable.*），不碰工作区文件 |
+| 💾 状态存储 | 项目/布局/绑定存 localStorage，媒体存 IndexedDB；文件窗访问已配置项目目录 |
 | 🎨 界面 | TypeScript + React（宿主 external）+ 原生 CSS，暗色优先 + 浅色主题 |
 
 ---
 
 ## 快速开始
 
+**v0.4.0** 在下述已测范围内增加 Windows 官方桌面端支持。网页端兼容声明仅列 **DSH 0.1.1-rc.2 / 0.1.2-rc.1 / 0.2.0-rc.2**；桌面已测范围为 **Windows 官方桌面端 + 0.2.0-rc.2**。桌面页面点测与定向回归不等于最终包完整桌面端业务验收；旧版沿用此前页面验收并补代码回归，未重跑整套旧版 GUI。升级前备份重要数据并核对其他插件，公开发布状态以 GitHub Release 为准。
+
 1. **安装**（二选一）：
 
    **A · 一行命令（推荐）** —— 直接安装 GitHub Release 的安装包，无需 Git：
 
    ```bash
-   dsh plugin --profile web add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
+   dsh plugin --profile web add "https://github.com/qiudl/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
    ```
 
    **B · 本地克隆（想改源码用）** —— `link:` 只接受本地绝对路径（路径不要带空格）：
 
    ```bash
-   git clone https://github.com/Aisland-SJL/dsh-worktable.git
+   git clone https://github.com/qiudl/dsh-worktable.git
    dsh plugin --profile web add "link:<克隆出来的 dsh-worktable 仓库目录的绝对路径>/01_content"
    # 例：克隆到 D:\tools 后 → dsh plugin --profile web add "link:D:/tools/dsh-worktable/01_content"
    ```
@@ -73,6 +75,18 @@
 2. **重启** DSH web 进程并刷新界面
 3. **打开控制室**：点击固定首位的 🖥️ 控制室卡片 → 绑定一条对话（加入现有或新建）→ 得到实时卡片网格
 4. **创建项目**：侧边栏 ＋ → 选布局预设、填项目文件夹
+
+### Windows 官方桌面端
+
+先保存任务，从应用菜单/托盘完整退出（只关窗口不够）；将安装目录占位符替换为实际位置，在 PowerShell 执行，再手动重新打开：
+
+```powershell
+& "<桌面端安装目录>\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add "https://github.com/qiudl/dsh-worktable/releases/download/v0.4.0/dsh-worktable-0.4.0.tgz"
+```
+
+必须使用桌面端自带 CLI 与 `desktop` profile，不用不固定版本的 npx 或网页 CLI 代替。保留实际 DSH_HOME；即便共用会话数据目录，网页与桌面来源的项目/布局/媒体也不会自动同步。
+
+自定义窗口明确选「未分组」时不再偷偷加入宿主分组。控制室新建的是**空对话**：已测 DSH 0.2 的未分组空对话不能使用原生输入框，因此插件提示并禁用这一创建，请自行选分组或加入可用的现有对话；不自动改组、不发送激活消息。现有分组未选具体项时也不退回默认分组，旧宿主未分组创建行为保持。
 
 ---
 
@@ -83,7 +97,7 @@
 - **宿主**：`/api/worktable/*` 路由——健康检查、文件系统、git、文件读写、站点托管、mkdir、工作区、原生皮肤模板；WebSocket `/api/worktable/term` 提供终端窗格（Windows 下为 PowerShell）
 - **客户端**：经 slot 协议注入侧边栏与 shell overlay；分栏引擎、标签模型、拖拽与持久化均为自研
 - **控制室**：读取宿主会话列表快照（运行中/待决/已完成、后台任务、子代理目录）——事件驱动镜像，模型不参与
-- **窗口任务**：agent 完成后在项目文件夹写 `widget-result.json`，客户端把产物挂载进指定窗口并锁死
+- **窗口任务**：「自定义」任务登记项目/窗格/绑定身份，agent 在 `.dsh-worktable/project-<项目 ID>/` 下写专属结果；新项目不因共用文件夹而继承其他项目的窗口内容
 
 ---
 
@@ -101,6 +115,7 @@ node --check lib/index.js
 - 回归：`04_test/functional-diag.cjs`（20 步）+ 专项探测（控制室、绑定弹窗、收起态贴片、模型继承）；
   发布流水线内嵌：分栏锚点 DOM 回归 `04_test/anchor-dom.test.mjs`（8 场景，双宿主会话结构）与
   数据目录解析回归 `04_test/server-home.test.mjs`（3 组场景，无循环/路径展开/官方分支夹具）
+- 发布打包唯一入口为 `npm run pack`，另含 98 项输入/会话/详情/传输/挂载回归、独立安装与客户端工厂门禁；`npm run test:widget` 单独运行 26 项归属、会话隔离、共目录、延迟结果与重试回归。上传后用 `npm run verify:remote -- --expect-sha <最终 SHA> v0.4.0` 核对，并另查 latest。
 
 ---
 
@@ -108,29 +123,23 @@ node --check lib/index.js
 
 **Q：DeepSeek Harness 更新后，工作台打不开 / 服务启动失败？**
 
-先放心：你的数据不会丢 —— 项目、绑定、布局都存在浏览器本地（localStorage），项目文件都在你自己的项目文件夹里，升级或修复都不会动它们。按下面两种情况处理：
+项目、绑定和布局存在浏览器 localStorage，媒体存在 IndexedDB，项目文件保存在自己的项目目录。更改安装前先备份重要数据；需要保留工作台状态时，应保持原浏览器来源，不主动清空浏览器存储。
 
 **情况 A：Harness 正常，只是工作台需要更新**
 
 - 打开工作台「设置」→ 点「立即检查」；侧栏「工作台」旁出现琥珀色更新徽标时，点它选择「复制 AI 提示词」，把那段话发给你的 AI 助手执行即可；
-- 或直接重跑安装命令（永远装最新版），装完重启 dsh web 并刷新：
+- 网页端可重跑安装命令（安装最新已发布版本），装完重启 dsh web 并刷新；桌面用户须用上方桌面安装步骤：
 
   ```bash
-  dsh plugin --profile web add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
+  dsh plugin --profile web add "https://github.com/qiudl/dsh-worktable/releases/latest/download/dsh-worktable.tgz"
   ```
 
 **情况 B：Harness 本身挂了**（服务起不来 / 报 Failed to load plugins）
 
-- 首选：升级 Harness 到最新版（已知问题的官方修复通常都在新版里）：终端执行 `npx @deepseek-ai/dsh web`；
-- 如果升级后仍然失败：把下面这段复制发给**任意 AI 助手**（Claude、Codex、GLM 等都可以，不需要 DeepSeek Harness 本身）：
-
-> 帮我修复 DeepSeek Harness 的自研插件加载问题（报错通常是 Failed to load plugins 或服务启动失败）：
-> 1. 终端执行 npx @deepseek-ai/dsh web 升级到最新版并启动；成功即结束。
-> 2. 若仍失败：打开 ~/.dsh/profiles/web/package.json，找出 dependencies 里所有 link: 开头的插件路径，计算它们的共同上级目录（例如都装在 D:\projects 下，上级就是 D:\projects）。
-> 3. 在该上级目录创建名为 node_modules 的目录联接，指向 ~/.dsh/profiles/node_modules：mklink /J "<上级目录>\node_modules" "%USERPROFILE%\.dsh\profiles\node_modules"；若该上级目录已存在 node_modules，就改用它的上一级目录再试。
-> 4. 重启 dsh web，打开 http://127.0.0.1:3080 确认工作台恢复。
-
-该问题已反馈 DeepSeek Harness 官方，正在修复；官方修复发布后，升级到新版即可彻底解决。
+- 记录实际 DSH 版本、插件版本、profile/数据目录位置和第一条完整错误；完整退出重启后再判断。
+- 缺少导出、模块导入失败时，要核对报错所指插件与宿主版本。新版宿主可能改变接口，盲目全部升级不能代替定位原因。
+- 上级 `node_modules` 目录链接曾用于某个旧版 `link:` 加载问题，不是通用修法。不要直接创建；已有链接应在确认插件无依赖后再移除，只删链接并保留目标目录。
+- 模型请求返回 HTTP 400 属于独立的请求问题，本工作台发布包不包含宿主层面的对应修复。
 
 ## 指哪打哪标注 📌
 
@@ -143,17 +152,17 @@ node --check lib/index.js
 
 ## 已知限制
 
-- **平台**：Windows 是当前完整验证平台。macOS 为实验性支持：核心文件路径代码已做跨平台适配，但尚未在 macOS 真机完成端到端验证。
-- 状态在浏览器本地（localStorage）——项目、绑定与视图不跨设备同步
+- **平台**：Windows 网页端与官方桌面端的已测版本/流程见上方说明，最终包完整桌面端业务验收仍未完成；macOS 为实验性支持且尚未真机端到端验证。
+- 状态在浏览器本地（localStorage 与 IndexedDB）——项目、绑定、视图与媒体不跨设备同步
 - 终端窗格在 Windows 上是朴素的 PowerShell 宿主（与原生终端应用无 PTY 对等）
-- 自动挂载要求 agent 确实在项目文件夹写出 `widget-result.json`
+- 自动挂载要求已登记「自定义」任务且写出身份匹配的 v2 结果文件。旧已保存窗口保留，根目录旧 `widget-result.json` 不再导入；旧对话可从目标窗口「自定义 → 发送到会话」发一次任务建立新关联，随后在同一对话直接继续修改。手动关闭/替换内容会撤销关联，此前误挂的标签需关闭一次。同目录项目若主动写同一个实际文件，文件内容仍可能互相影响。
 - 控制室只监控**已绑定对话**的项目；未绑定的项目显示为空闲
 
 ---
 
 ## 隐私
 
-无遥测；除宿主 API 与插件自身路由外无任何网络请求。用户状态全部留在 localStorage。可选更新检查：对 GitHub Releases API 做只读 GET（自动每天最多一次，另有手动「立即检查」），不上传任何数据，可在设置中关闭。
+插件没有新增分析统计服务。更新检查对 GitHub Releases API 做只读请求，可在设置中关闭；插件还使用宿主 API/WebSocket、加载用户选择的网页，并提供可读写文件和联网的交互式终端。偏好与媒体使用浏览器存储。文件访问、终端继承环境变量等具体边界见[权限与外部服务披露](01_content/README.md#权限与外部服务如实披露)。
 
 ---
 

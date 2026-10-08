@@ -1,10 +1,10 @@
 {
   "name": "dsh-worktable",
   "description": "工作台 Worktable：DeepSeek Harness 侧边栏的 agent 级项目容器（应用抽屉）",
-  "version": "0.3.3",
+  "version": "0.4.6",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Aisland-SJL/dsh-worktable.git",
+    "url": "https://github.com/qiudl/dsh-worktable.git",
     "directory": "01_content"
   },
   "engines": {
@@ -39,10 +39,11 @@
       ]
     },
     "compatibility": {
-      "dsh": "0.1.1-rc.2 || 0.1.2-rc.1",
+      "dsh": "0.1.1-rc.2 || 0.1.2-rc.1 || 0.2.0-rc.2",
       "dshReleases": {
         "0.1.1-rc.2": "compatible",
-        "0.1.2-rc.1": "compatible"
+        "0.1.2-rc.1": "compatible",
+        "0.2.0-rc.2": "compatible"
       }
     }
   },
@@ -51,7 +52,14 @@
     "check": "node --check lib/index.js && node --check lib/client.js",
     "pack": "node release-prep.mjs",
     "test:gate": "node client-factory-gate.test.mjs",
-    "verify:remote": "node verify-remote.mjs"
+    "test:input": "node ../04_test/host-input.test.mjs",
+    "test:session": "node ../04_test/session-compat.test.mjs",
+    "test:details": "node ../04_test/session-details.test.mjs",
+    "test:transport": "node ../04_test/host-transport.test.mjs",
+    "test:widget": "node ../04_test/widget-mount.test.mjs",
+    "verify:remote": "node verify-remote.mjs",
+    "test:cloudwrite": "node ../04_test/cloud-state-write.test.mjs",
+    "test:variantb": "node ../04_test/variant-b-subnav.test.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

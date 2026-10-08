@@ -7535,6 +7535,7 @@ var require_core = __commonJS({
 // src/client/index.tsx
 var index_exports = {};
 __export(index_exports, {
+  PROJECT_CARD_SELECTOR: () => PROJECT_CARD_SELECTOR,
   WorktableSection: () => WorktableSection,
   apply: () => apply,
   createCustomSession: () => createCustomSession,
@@ -7835,6 +7836,26 @@ var css = xterm_default + "\n" + [
   ".dsh-wt_shortcutName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
   ".dsh-wt_shortcutBadge{flex:none;font-size:9px;line-height:14px;padding:0 5px;border-radius:8px;background:var(--dsw-alias-fill-l1,rgba(255,255,255,.06));color:var(--dsw-alias-label-tertiary,#6e7683)}",
   // 项目区
+  ".dsh-wt_layoutWrap{display:flex;flex-direction:column;gap:3px;position:relative}",
+  ".dsh-wt_layoutHasNav .dsh-wt_layoutArrow{display:none}",
+  ".dsh-wt_subChevron{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--dsw-alias-label-tertiary,#6e7683);transition:transform .15s ease,color .15s ease}",
+  ".dsh-wt_layout[data-sub=true] .dsh-wt_subChevron{transform:translateY(-50%) rotate(90deg);color:var(--dsw-alias-state-accent-primary,#4f8ef7)}",
+  ".dsh-wt_subNav{display:flex;flex-direction:column;gap:2px;margin:0 0 4px 14px;padding-left:9px;border-left:1px solid var(--dsw-alias-border-l1,#262b36)}",
+  ".dsh-wt_subNavHead{padding:1px 8px 4px;font-size:10px;color:var(--dsw-alias-label-tertiary,#6e7683);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+  ".dsh-wt_subNavItem{display:block;width:100%;text-align:left;padding:5px 8px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#9aa4b2);font:inherit;font-size:11.5px;line-height:1.4;cursor:pointer}",
+  ".dsh-wt_subNavItem:hover{background:var(--dsw-alias-fill-l1,rgba(255,255,255,.06));color:var(--dsw-alias-label-primary,#e6e8eb)}",
+  ".dsh-wt_subNavItem[data-on=true]{color:var(--dsw-alias-label-primary,#e6e8eb);border-color:var(--dsw-alias-state-accent-primary,#4f8ef7);background:rgba(79,142,247,.10)}",
+  ".dsh-wt_subNavSep{height:1px;margin:3px 2px;background:var(--dsw-alias-border-l1,#262b36)}",
+  ".dsh-wt_subNavCfg{color:var(--dsw-alias-label-tertiary,#6e7683)}",
+  ".dsh-wt_cloudCard{margin:2px 0 8px;padding:8px 9px;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:8px;background:var(--dsw-alias-fill-l1,rgba(255,255,255,.02))}",
+  ".dsh-wt_cloudState{font-size:11px;color:var(--dsw-alias-label-secondary,#9aa4b2);margin-bottom:6px;word-break:break-all;line-height:1.5}",
+  ".dsh-wt_cloudBtns{display:flex;gap:6px}",
+  ".dsh-wt_cloudBtn{flex:1;padding:5px 8px;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11.5px;cursor:pointer}",
+  ".dsh-wt_cloudBtn:hover:not(:disabled){border-color:var(--dsw-alias-state-accent-primary,#4f8ef7)}",
+  ".dsh-wt_cloudBtn:disabled{opacity:.5;cursor:default}",
+  ".dsh-wt_cloudHint{margin-top:6px;font-size:11px;color:#3fb950;line-height:1.5}",
+  ".dsh-wt_cloudWarn{margin-top:6px;font-size:10.5px;color:#d29922;line-height:1.5;word-break:break-all}",
+  ".dsh-wt_cloudNote{margin-top:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary,#6e7683);line-height:1.5}",
   ".dsh-wt_projects{display:flex;flex-direction:column;gap:4px}",
   ".dsh-wt_projects[data-managing=true]{opacity:.55;pointer-events:none}",
   ".dsh-wt_empty{padding:8px 10px;border:1px dashed var(--dsw-alias-border-l1,#262b36);border-radius:8px;color:var(--dsw-alias-label-tertiary,#6e7683);font-size:11px;text-align:center}",
@@ -8107,6 +8128,14 @@ var css = xterm_default + "\n" + [
   ".dsh-wt_browserInput{flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11px;line-height:16px}",
   ".dsh-wt_browserGo{flex:none;width:20px;height:20px;padding:0;border:none;border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary,#9aa4b2);font-size:12px;cursor:pointer}",
   ".dsh-wt_browserGo:hover{color:var(--dsw-alias-label-primary,#e6e8eb);background:var(--dsw-alias-fill-l1,rgba(255,255,255,.06))}",
+  ".dsh-wt_browserGo:disabled{opacity:.35;cursor:default}",
+  // iframe 承载层：缩放模式下 iframe 会比容器大（或小），由容器负责滚动/裁剪；
+  // 100% 档 iframe 仍是 100%×100% 绝对定位填满容器 → 与改动前视觉一致。
+  ".dsh-wt_frameWrap{flex:1;min-height:0;position:relative;overflow:auto;background:#010409}",
+  ".dsh-wt_frameWrap > .dsh-wt_paneFrame{position:absolute;top:0;left:0;right:auto;bottom:auto}",
+  ".dsh-wt_browserZoom{flex:none;height:20px;padding:0 2px;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:4px;background:var(--dsw-alias-fill-l1,rgba(255,255,255,.03));color:var(--dsw-alias-label-secondary,#9aa4b2);font:inherit;font-size:10px;line-height:16px;cursor:pointer}",
+  ".dsh-wt_browserTip{flex:none;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary,#6e7683)}",
+  ".dsh-wt_browserTipFail{color:var(--dsw-alias-state-error-primary,#f47067)}",
   ".dsh-wt_paneWip{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--dsw-alias-label-tertiary,#6e7683)}",
   ".dsh-wt_paneWipIcon{font-size:26px;line-height:30px}",
   ".dsh-wt_paneWipText{font-size:11px}",
@@ -8159,6 +8188,21 @@ var css = xterm_default + "\n" + [
   ".dsh-wt_tabTitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
   ".dsh-wt_tabClose{flex:none;width:14px;height:14px;padding:0;border:none;border-radius:3px;background:transparent;color:var(--dsw-alias-label-tertiary,#6e7683);font-size:9px;line-height:1;cursor:pointer}",
   ".dsh-wt_tabClose:hover{color:var(--dsw-alias-label-primary,#e6e8eb);background:var(--dsw-alias-fill-l1,rgba(255,255,255,.08))}",
+  // 标签保活包裹层：激活时 display:contents（不生成盒子，内容仍直接参与窗格 flex 布局，
+  // 与旧「只渲染激活标签」的盒模型一致）；非激活时 [hidden] 覆盖为 display:none。
+  // 两条都要写：[hidden] 是 UA 规则，作者侧的 display:contents 会盖过它。
+  ".dsh-wt_tabWrap{display:contents}",
+  ".dsh-wt_tabWrap[hidden]{display:none}",
+  // 标签栏「＋」追加标签 + 选择器下拉（fixed 避开 tabBar 的 overflow 裁剪；
+  // z-index 取 69：低于分栏标题栏 70、高于窗格 68）
+  ".dsh-wt_tabAdd{flex:none;width:18px;height:16px;padding:0;margin-bottom:2px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--dsw-alias-label-secondary,#9aa4b2);font-size:11px;line-height:1;cursor:pointer}",
+  ".dsh-wt_tabAdd:hover{color:var(--dsw-alias-label-primary,#e6e8eb);background:var(--dsw-alias-fill-l1,rgba(255,255,255,.08));border-color:var(--dsw-alias-border-l1,#262b36)}",
+  ".dsh-wt_tabAddPop{position:fixed;z-index:69;display:flex;flex-direction:column;box-sizing:border-box;width:200px;padding:4px;border:1px solid var(--dsw-alias-border-l2,#3a4150);border-radius:10px;background:var(--dsw-alias-bg-base,#0b0e14);box-shadow:var(--dsw-shadow-lv2,0 8px 24px rgba(0,0,0,.4))}",
+  ".dsh-wt_tabAddPopBody{display:flex;flex-direction:column;height:220px;min-height:0}",
+  // 下拉里复用窗格选择器：按钮收小，2 列 3 行放得下 5 个内置入口
+  ".dsh-wt_tabAddPop .dsh-wt_panePicker{padding:8px}",
+  ".dsh-wt_tabAddPop .dsh-wt_panePick{width:74px;height:58px;gap:3px;padding:4px;font-size:10px;line-height:13px}",
+  ".dsh-wt_tabAddPop .dsh-wt_panePick span{font-size:16px;line-height:18px}",
   // 树形资源管理器
   ".dsh-wt_treeRow{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;padding:3px 6px;border:none;border-radius:5px;background:transparent;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11px;line-height:16px;cursor:pointer;text-align:left}",
   ".dsh-wt_treeRow:hover{background:var(--dsw-alias-fill-l1,rgba(255,255,255,.05))}",
@@ -8372,6 +8416,7 @@ var css = xterm_default + "\n" + [
   ".dsh-wt_consoleSelect,.dsh-wt_consoleInput{width:100%;box-sizing:border-box;padding:6px 8px;background:var(--dsw-alias-fill-l1,rgba(255,255,255,.03));border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:8px;color:var(--dsw-alias-label-primary,#e6e8eb);font:inherit;font-size:11.5px;line-height:16px;outline:none}",
   ".dsh-wt_consoleSelect:focus,.dsh-wt_consoleInput:focus{border-color:var(--dsw-alias-state-accent-primary,#4f8ef7)}",
   ".dsh-wt_consoleErr{margin:0;font-size:11px;line-height:16px;color:var(--dsw-alias-state-danger,#f85149)}",
+  ".dsh-wt_consoleHint{margin:0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#aab6cd)}",
   ".dsh-wt_consoleCreateBtn{margin-top:2px;padding:7px 10px;border:1px solid var(--dsw-alias-state-accent-primary,#4f8ef7);border-radius:8px;background:transparent;color:var(--dsw-alias-state-accent-primary,#4f8ef7);font:inherit;font-size:12px;line-height:18px;cursor:pointer}",
   ".dsh-wt_consoleCreateBtn:hover:not(:disabled){background:var(--dsw-alias-fill-l1,rgba(255,255,255,.05))}",
   ".dsh-wt_consoleCreateBtn:disabled{opacity:.55;cursor:default}",
@@ -8403,8 +8448,26 @@ var css = xterm_default + "\n" + [
 
 // src/client/locales.ts
 var zh = {
+  "cloud.title": "\u4E91\u540C\u6B65\uFF08\u672C\u673A\u72B6\u6001\u6587\u4EF6\uFF09",
+  "cloud.restore": "\u4ECE\u4E91\u7AEF\u6062\u590D",
+  "cloud.restoring": "\u6062\u590D\u4E2D\u2026",
+  "cloud.push": "\u63A8\u9001\u5230\u4E91\u7AEF",
+  "cloud.pushing": "\u63A8\u9001\u4E2D\u2026",
+  "cloud.restored": "\u5DF2\u4ECE\u4E91\u7AEF\u6062\u590D {n} \u4E2A\u5E03\u5C40\u9879\u76EE",
+  "cloud.pushed": "\u5DF2\u63A8\u9001\u5230\u4E91\u7AEF",
+  "cloud.empty": "\u4E91\u7AEF\u5FEB\u7167\u4E3A\u7A7A\uFF0C\u672A\u505A\u6539\u52A8",
+  "cloud.notConfigured": "\u672A\u914D\u7F6E\u4E91\u7AEF\u8DEF\u5F84\uFF0803_local/local.json\uFF09",
+  "cloud.failed": "\u64CD\u4F5C\u5931\u8D25\uFF0C\u8BE6\u60C5\u89C1\u63A7\u5236\u53F0",
+  "cloud.pushFailed": "\u4E0A\u6B21\u81EA\u52A8\u63A8\u9001\u5931\u8D25\uFF1A",
+  "cloud.snapshot": "\u5FEB\u7167\uFF1A{time}",
+  "cloud.snapshotUnknown": "\u5FEB\u7167\uFF1A\u65F6\u95F4\u672A\u77E5",
+  "cloud.layouts": "\u4E2A\u5E03\u5C40\u9879\u76EE",
+  "cloud.note": "\u91CD\u542F\u540E\u7AEF\u53E3\u53D8\u5316\u4F1A\u8BA9\u672C\u5730\u72B6\u6001\u5BF9\u4E0D\u4E0A\u53F7\uFF1B\u9879\u76EE\u4E0D\u89C1\u4E86\u70B9\u300C\u4ECE\u4E91\u7AEF\u6062\u590D\u300D\u5373\u53EF\u627E\u56DE\uFF08\u4F1A\u5148\u5907\u4EFD\u5F53\u524D\u672C\u5730\u72B6\u6001\uFF09\u3002",
   "title": "\u5DE5\u4F5C\u53F0",
   "rail.title": "\u5DE5\u4F5C\u53F0\uFF08\u5C55\u5F00\u4FA7\u8FB9\u680F\u67E5\u770B\uFF09",
+  "rail.subHint": "\u70B9\u51FB\u5C55\u5F00\u9875\u9762 \xB7 \u53CC\u51FB\u6253\u5F00\u5B8C\u6574\u5E03\u5C40",
+  "rail.configure": "\u914D\u7F6E\u4E8C\u7EA7\u83DC\u5355\u2026",
+  "rail.openLayout": "\u6253\u5F00\u5B8C\u6574\u5E03\u5C40",
   "handle.title": "\u6309\u4F4F\u62D6\u52A8\u4F4D\u7F6E \xB7 \u53CC\u51FB\u590D\u4F4D",
   "handle.aria": "\u62D6\u52A8\u5DE5\u4F5C\u53F0\u4F4D\u7F6E",
   "menu.search": "\u641C\u7D22\u9879\u76EE",
@@ -8569,6 +8632,8 @@ var zh = {
   "console.groupNone": "\u65E0\u5206\u7EC4\uFF08\u7528\u9879\u76EE\u6587\u4EF6\u5939\uFF09",
   "console.groupExisting": "\u52A0\u5165\u73B0\u6709\u5206\u7EC4",
   "console.groupNew": "\u65B0\u5EFA\u5206\u7EC4",
+  "console.chooseGroup": "\u9009\u62E9\u5206\u7EC4\u2026",
+  "console.blankNeedsGroup": "\u5F53\u524D DSH \u7684\u672A\u5206\u7EC4\u7A7A\u5BF9\u8BDD\u65E0\u6CD5\u8F93\u5165\uFF0C\u8BF7\u9009\u62E9\u5206\u7EC4\u6216\u52A0\u5165\u73B0\u6709\u5BF9\u8BDD\u3002",
   "console.newParentPh": "\u5206\u7EC4\u7236\u76EE\u5F55\uFF0C\u4F8B\u5982 E:\\AI_Workspace",
   "console.newNamePh": "\u5206\u7EC4\u6587\u4EF6\u5939\u540D\uFF08\u5C06\u521B\u5EFA\u5E76\u6CE8\u518C\uFF09",
   "console.createBind": "\u65B0\u5EFA\u5E76\u7ED1\u5B9A",
@@ -8589,6 +8654,16 @@ var zh = {
   "pane.jobsEmpty": "\u5F53\u524D\u4F1A\u8BDD\u6682\u65E0\u540E\u53F0\u4EFB\u52A1",
   "pane.termFail": "\u7EC8\u7AEF\u4E0D\u53EF\u7528\uFF08\u5BBF\u4E3B\u7F3A\u5C11 node-pty/ws \u6216\u8FDE\u63A5\u5931\u8D25\uFF09",
   "pane.closeTab": "\u5173\u95ED\u6807\u7B7E\u9875",
+  "pane.addTab": "\u8FFD\u52A0\u6807\u7B7E\u9875",
+  "pane.openExternal": "\u5728\u7CFB\u7EDF\u6D4F\u89C8\u5668\u6253\u5F00",
+  "pane.copyLink": "\u590D\u5236\u94FE\u63A5",
+  "pane.copied": "\u5DF2\u590D\u5236\u94FE\u63A5",
+  "pane.copyFail": "\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u9009\u4E2D\u5730\u5740",
+  "pane.openFallback": "\u5DF2\u590D\u5236\u94FE\u63A5\uFF1A\u82E5\u7CFB\u7EDF\u6D4F\u89C8\u5668\u6CA1\u6253\u5F00\uFF0C\u8BF7\u7C98\u8D34\u5730\u5740",
+  "pane.zoom": "\u7F29\u653E\uFF08100% \u586B\u6EE1\u7A97\u683C / \u9002\u5E94\u5BBD\u5EA6\u7B49\u6BD4\u7F29\u5C0F / 125% \u653E\u5927\uFF09",
+  "pane.zoom100": "100%",
+  "pane.zoomFit": "\u9002\u5E94\u5BBD\u5EA6",
+  "pane.zoom125": "125%",
   "pane.collapse": "\u6298\u53E0\u7A97\u683C",
   "annot.label": "\u6807\u6CE8\uFF1A\u70B9\u51FB\u6216\u62D6\u52A8\u7A97\u53E3\u4E2D\u7684\u4F4D\u7F6E\u63D0\u8981\u6C42",
   "annot.hint": "\u70B9\u51FB\u6216\u62D6\u52A8\u6846\u9009\u7A97\u53E3\u4E2D\u7684\u4EFB\u610F\u4F4D\u7F6E\uFF0C\u518D\u8F93\u5165\u4F60\u7684\u8981\u6C42\uFF1B\u8FDE\u7EED\u6807\u6CE8\u4F1A\u4F9D\u6B21\u8FFD\u52A0\u5230\u8F93\u5165\u6846",
@@ -8630,11 +8705,30 @@ var zh = {
   "update.copied": "\u5DF2\u590D\u5236",
   "update.copyFail": "\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u9009\u62E9\u6587\u672C",
   "update.skipDone": "\u5DF2\u5FFD\u7565\u6B64\u7248\u672C\uFF08\u4E0B\u4E00\u7248\u53D1\u5E03\u65F6\u518D\u63D0\u9192\uFF09",
-  "update.upgradeHint": "\u6267\u884C\u547D\u4EE4\u540E\u9700\u91CD\u542F dsh web \u5E76\u5237\u65B0\u9875\u9762"
+  "update.upgradeHint": "\u6267\u884C\u547D\u4EE4\u540E\u9700\u91CD\u542F dsh web \u5E76\u5237\u65B0\u9875\u9762",
+  "update.upgradeHintDesktop": "\u8BF7\u4F7F\u7528\u684C\u9762\u7AEF\u81EA\u5E26 CLI\uFF1B\u5B89\u88C5\u524D\u5B8C\u6574\u9000\u51FA\uFF0C\u5B8C\u6210\u540E\u624B\u52A8\u91CD\u65B0\u6253\u5F00\u684C\u9762\u7AEF"
 };
 var en = {
+  "cloud.title": "Cloud sync (local state file)",
+  "cloud.restore": "Restore from cloud",
+  "cloud.restoring": "Restoring\u2026",
+  "cloud.push": "Push to cloud",
+  "cloud.pushing": "Pushing\u2026",
+  "cloud.restored": "Restored {n} layout projects from cloud",
+  "cloud.pushed": "Pushed to cloud",
+  "cloud.empty": "Cloud snapshot is empty; nothing changed",
+  "cloud.notConfigured": "Cloud path not configured (03_local/local.json)",
+  "cloud.failed": "Operation failed; see console",
+  "cloud.pushFailed": "Last auto push failed: ",
+  "cloud.snapshot": "Snapshot: {time}",
+  "cloud.snapshotUnknown": "Snapshot: time unknown",
+  "cloud.layouts": "layout projects",
+  "cloud.note": "A restart changes the port, so local state no longer matches. If projects vanish, click \u201CRestore from cloud\u201D (your local state is backed up first).",
   "title": "Worktable",
   "rail.title": "Worktable (expand sidebar to view)",
+  "rail.subHint": "Click to expand pages \xB7 double-click to open full layout",
+  "rail.configure": "Configure submenu\u2026",
+  "rail.openLayout": "Open full layout",
   "handle.title": "Drag to move \xB7 double-click to reset",
   "handle.aria": "Drag worktable position",
   "menu.search": "Search projects",
@@ -8799,6 +8893,8 @@ var en = {
   "console.groupNone": "No group (use project folder)",
   "console.groupExisting": "Join existing group",
   "console.groupNew": "New group",
+  "console.chooseGroup": "Choose a group\u2026",
+  "console.blankNeedsGroup": "Blank ungrouped chats cannot accept input in this DSH. Choose a group or join an existing chat.",
   "console.newParentPh": "Group parent folder, e.g. E:\\AI_Workspace",
   "console.newNamePh": "Group folder name (created & registered)",
   "console.createBind": "Create & bind",
@@ -8819,6 +8915,16 @@ var en = {
   "pane.jobsEmpty": "No background jobs in the current session",
   "pane.termFail": "Terminal unavailable (host missing node-pty/ws, or connection failed)",
   "pane.closeTab": "Close tab",
+  "pane.addTab": "Add tab",
+  "pane.openExternal": "Open in system browser",
+  "pane.copyLink": "Copy link",
+  "pane.copied": "Link copied",
+  "pane.copyFail": "Copy failed \u2014 select the address manually",
+  "pane.openFallback": "Link copied: paste it if the browser did not open",
+  "pane.zoom": "Zoom (100% fills the pane / Fit width scales down / 125% magnifies)",
+  "pane.zoom100": "100%",
+  "pane.zoomFit": "Fit width",
+  "pane.zoom125": "125%",
   "pane.collapse": "Collapse pane",
   "annot.label": "Annotate: click or drag a spot in the window",
   "annot.hint": "Click or drag to select a spot in any window, then type your request; consecutive annotations append to the input.",
@@ -8860,7 +8966,8 @@ var en = {
   "update.copied": "Copied",
   "update.copyFail": "Copy failed \u2014 select the text manually",
   "update.skipDone": "Skipped (will remind on the next release)",
-  "update.upgradeHint": "Run the command, then restart dsh web and refresh"
+  "update.upgradeHint": "Run the command, then restart dsh web and refresh",
+  "update.upgradeHintDesktop": "Use the Desktop bundled CLI; fully quit before installing, then reopen Desktop manually"
 };
 var NS = "worktable";
 
@@ -8895,8 +9002,80 @@ function basenameOf(p) {
 // src/client/split.tsx
 var import_react = require("react");
 
+// src/client/hostTransport.ts
+function hostWebSocketUrl(path, surface = {
+  href: location.href,
+  protocol: location.protocol,
+  streamBaseUrl: globalThis.__DSH_TRANSPORT__?.streamBaseUrl
+}) {
+  const desktop = surface.protocol === "dsh-app:";
+  if (desktop && !surface.streamBaseUrl) throw new Error("Desktop Host stream URL unavailable");
+  const url = new URL(path, desktop ? surface.streamBaseUrl : surface.href);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Unsupported Host transport protocol: " + url.protocol);
+  }
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.href;
+}
+function worktableUpgrade(protocol = typeof location === "undefined" ? "http:" : location.protocol) {
+  const desktop = protocol === "dsh-app:";
+  const command = "dsh plugin --profile " + (desktop ? "desktop" : "web") + ' add "https://github.com/qiudl/dsh-worktable/releases/latest/download/dsh-worktable.tgz"';
+  const prompt = desktop ? "\u5E2E\u6211\u5347\u7EA7 dsh-worktable\u3002\u6211\u5F53\u524D\u4F7F\u7528\u5B98\u65B9\u684C\u9762\u7AEF\uFF1A\u5148\u5B9A\u4F4D\u8BE5\u684C\u9762\u7AEF\u81EA\u5E26\u7684 dsh CLI \u5E76\u51C6\u5907\u66F4\u65B0\uFF0C\u518D\u63D0\u9192\u6211\u5B8C\u6574\u9000\u51FA\u684C\u9762\u7AEF\u3002\u786E\u8BA4\u9000\u51FA\u540E\u4F7F\u7528\u8BE5 CLI \u6267\u884C " + command + "\u3002\u4E0D\u8981\u4F7F\u7528\u7F51\u9875\u7AEF CLI\uFF0C\u4E0D\u8981\u4FEE\u6539 web profile\uFF0C\u4E0D\u8981\u81EA\u52A8\u6740\u8FDB\u7A0B\u6216\u91CD\u542F\uFF1B\u5B8C\u6210\u540E\u63D0\u9192\u6211\u624B\u52A8\u91CD\u65B0\u6253\u5F00\u684C\u9762\u7AEF\u3002" : "\u5E2E\u6211\u5347\u7EA7 dsh-worktable\uFF1A\u6267\u884C " + command + "\uFF0C\u5B8C\u6210\u540E\u63D0\u9192\u6211\u91CD\u542F dsh web \u5E76\u5237\u65B0\u9875\u9762";
+  return { command, prompt, desktop };
+}
+
 // src/client/changelog.ts
-var CHANGELOG_V030 = `\u66F4\u65B0\u516C\u544A \xB7 v0.3.3
+var CHANGELOG_V030 = `\u66F4\u65B0\u516C\u544A \xB7 v0.4.0
+
+\u{1F5A5}\uFE0F \u7F51\u9875\u7AEF\u4E0E Windows \u684C\u9762\u7AEF\u9002\u914D\uFF0C\u4FEE\u590D\u9879\u76EE\u5185\u5BB9\u4E32\u6302
+
+\u3010\u53CC\u7AEF\u4F7F\u7528\u3011\u540C\u4E00\u4E2A\u5DE5\u4F5C\u53F0\u63D2\u4EF6\u5305\u652F\u6301\u7F51\u9875\u7AEF\u4E0E\u5B98\u65B9 Windows \u684C\u9762\u7AEF\u3002\u5EF6\u7EED v0.3.4 \u5BF9 DSH 0.2 \u7F51\u9875\u7AEF\u7684\u9879\u76EE\u4E0E\u5BF9\u8BDD\u8054\u52A8\u3001\u6807\u6CE8\u8F93\u5165\u3001\u63A7\u5236\u5BA4\u72B6\u6001\u53CA\u6D88\u606F\u9884\u89C8\u9002\u914D\uFF0C\u672C\u6B21\u8865\u4E0A\u684C\u9762\u7AEF\u8FDE\u63A5\u4E0E\u5347\u7EA7\u5165\u53E3\u3002
+
+\u3010\u684C\u9762\u7AEF\u7EC8\u7AEF\u4E0E\u66F4\u65B0\u3011\u7EC8\u7AEF\u4F7F\u7528\u684C\u9762\u5BBF\u4E3B\u63D0\u4F9B\u7684\u8FDE\u63A5\u5730\u5740\uFF0C\u7F51\u9875\u7AEF\u4FDD\u7559\u539F\u8FDE\u63A5\u65B9\u5F0F\u3002\u66F4\u65B0\u63D0\u793A\u4F1A\u6309\u6240\u5728\u73AF\u5883\u9009\u62E9 web \u6216 desktop \u914D\u7F6E\uFF1B\u684C\u9762\u7528\u6237\u8BF7\u4F7F\u7528\u5E94\u7528\u81EA\u5E26\u7684 CLI\uFF0C\u5B8C\u6574\u9000\u51FA\u540E\u5B89\u88C5\uFF0C\u518D\u624B\u52A8\u91CD\u65B0\u6253\u5F00\u3002
+
+\u3010\u4FDD\u7559\u201C\u672A\u5206\u7EC4\u201D\u9009\u62E9\u3011\u81EA\u5B9A\u4E49\u7A97\u53E3\u65B0\u5EFA\u5BF9\u8BDD\u65F6\uFF0C\u9009\u62E9\u201C\u672A\u5206\u7EC4\u201D\u5C31\u4FDD\u6301\u672A\u5206\u7EC4\uFF0C\u9879\u76EE\u6587\u4EF6\u5939\u4EC5\u4F5C\u4E3A\u5DE5\u4F5C\u76EE\u5F55\u3002\u4FEE\u590D\u9ED8\u8BA4\u5206\u7EC4\u665A\u8FD4\u56DE\u65F6\u8986\u76D6\u7528\u6237\u9009\u62E9\u7684\u95EE\u9898\uFF1B\u5DF2\u6709\u5BF9\u8BDD\u7684\u5206\u7EC4\u4FDD\u6301\u539F\u6837\u3002
+
+\u3010\u63A7\u5236\u5BA4\u65B0\u5EFA\u5BF9\u8BDD\u3011\u5DF2\u6D4B DSH 0.2 \u7684\u672A\u5206\u7EC4\u7A7A\u5BF9\u8BDD\u65E0\u6CD5\u4F7F\u7528\u539F\u751F\u8F93\u5165\u6846\uFF0C\u63A7\u5236\u5BA4\u4F1A\u63D0\u793A\u539F\u56E0\u5E76\u7981\u7528\u8FD9\u4E00\u521B\u5EFA\u65B9\u5F0F\uFF0C\u8BF7\u9009\u62E9\u73B0\u6709/\u65B0\u5EFA\u5206\u7EC4\uFF0C\u6216\u52A0\u5165\u53EF\u7528\u7684\u73B0\u6709\u5BF9\u8BDD\u3002\u9009\u62E9\u201C\u73B0\u6709\u5206\u7EC4\u201D\u4F46\u5C1A\u672A\u9009\u5B9A\u5177\u4F53\u9879\u65F6\uFF0C\u4E5F\u4E0D\u4F1A\u9000\u56DE\u9ED8\u8BA4\u5206\u7EC4\u521B\u5EFA\uFF1B\u65E7\u5BBF\u4E3B\u4FDD\u7559\u539F\u672A\u5206\u7EC4\u521B\u5EFA\u884C\u4E3A\u3002
+
+\u3010\u65B0\u9879\u76EE\u4ECE\u7A7A\u767D\u5F00\u59CB\u3011\u65B0\u9879\u76EE\u5373\u4F7F\u4E0E\u65E7\u9879\u76EE\u540C\u540D\u3001\u4F7F\u7528\u540C\u4E00\u4E2A\u6587\u4EF6\u5939\uFF0C\u4E5F\u4E0D\u4F1A\u81EA\u52A8\u52A0\u8F7D\u65E7\u9879\u76EE\u7684\u7A97\u53E3\u5185\u5BB9\u3002\u81EA\u52A8\u6302\u8F7D\u5206\u522B\u8BC6\u522B\u9879\u76EE\u3001\u7A97\u53E3\u4E0E\u672C\u6B21\u4EFB\u52A1\u7684\u5173\u8054\uFF0C\u4E3A\u5404\u7A97\u53E3\u4F7F\u7528\u4E13\u5C5E\u7ED3\u679C\u6587\u4EF6\uFF1B\u9519\u8BEF\u5F52\u5C5E\u6216\u65E0\u6548\u7A97\u53E3\u7ED3\u679C\u4E0D\u4F1A\u88AB\u585E\u8FDB\u7A97\u53E31\u3002
+
+\u3010\u4E0D\u540C\u5BF9\u8BDD\u4E92\u4E0D\u4E32\u6302\u3011\u540C\u4E00\u9879\u76EE\u7684\u4E0D\u540C\u5BF9\u8BDD\u53EA\u83B7\u5F97\u548C\u66F4\u65B0\u5404\u81EA\u5173\u8054\u7684\u7A97\u53E3\uFF1B\u4E00\u4E2A\u5BF9\u8BDD\u5B8C\u6210\u65F6\uFF0C\u4E0D\u4F1A\u5F3A\u5236\u91CD\u6302\u53E6\u4E00\u5BF9\u8BDD\u7684\u65E7\u7ED3\u679C\u3002\u540C\u4E00\u5BF9\u8BDD\u7EE7\u7EED\u4FEE\u6539\u540C\u540D\u4F5C\u54C1\u65F6\uFF0C\u7A97\u53E3\u4ECD\u53EF\u91CD\u65B0\u52A0\u8F7D\u66F4\u65B0\u540E\u7684\u5185\u5BB9\u3002\u4EFB\u52A1\u63D0\u793A\u8BCD\u8981\u6C42\u786E\u8BA4\u9875\u9762\u5B9E\u9645\u6302\u8F7D\u540E\u518D\u62A5\u544A\u201C\u5DF2\u6302\u8F7D\u201D\uFF0C\u907F\u514D\u53EA\u5199\u51FA\u7ED3\u679C\u6587\u4EF6\u5C31\u62A5\u6210\u529F\u3002
+
+\u3010\u4FDD\u7559\u624B\u5DE5\u8C03\u6574\u4E0E\u8865\u6302\u91CD\u8BD5\u3011\u624B\u5DE5\u5173\u95ED\u3001\u66FF\u6362\u6216\u79FB\u52A8\u6807\u7B7E\uFF0C\u4EE5\u53CA\u66F4\u6362\u76EE\u5F55\u3001\u5E03\u5C40\u6216\u9879\u76EE\u7ED1\u5B9A\u540E\uFF0C\u65E7\u5173\u8054\u4E0D\u4F1A\u7EE7\u7EED\u8865\u6302\u6216\u8986\u76D6\u4F60\u7684\u8C03\u6574\uFF1B\u8FDF\u5230\u7684\u65E7\u8BF7\u6C42\u4E5F\u4F1A\u91CD\u65B0\u6838\u5BF9\u5F52\u5C5E\u3002\u9879\u76EE\u672A\u6253\u5F00\u65F6\u4FDD\u7559\u5F85\u6302\u8F7D\u8BB0\u5F55\uFF0C\u91CD\u65B0\u6253\u5F00\u4F1A\u8BFB\u53D6\u6700\u65B0\u7ED3\u679C\uFF1B\u8BFB\u53D6\u5931\u8D25\u540E\u8BB0\u5F55\u4ECD\u4FDD\u7559\uFF0C\u4E0B\u6B21\u6253\u5F00\u53EF\u91CD\u8BD5\uFF0C\u6210\u529F\u6302\u8F7D\u540E\u624D\u6E05\u9664\u3002
+
+\u3010\u65E7\u9879\u76EE\u7EE7\u7EED\u4F7F\u7528\u3011\u5DF2\u4FDD\u5B58\u7684\u7A97\u53E3\u3001\u4F5C\u54C1\u3001\u4F1A\u8BDD\u7ED1\u5B9A\u4E0E\u5A92\u4F53\u4FDD\u7559\u3002\u6839\u76EE\u5F55\u65E7 widget-result.json \u4E0D\u518D\u81EA\u52A8\u5BFC\u5165\uFF1B\u65E7\u5BF9\u8BDD\u82E5\u9700\u7EE7\u7EED\u81EA\u52A8\u6302\u8F7D\uFF0C\u8BF7\u4ECE\u76EE\u6807\u7A97\u53E3\u7684\u201C\u81EA\u5B9A\u4E49 \u2192 \u53D1\u9001\u5230\u4F1A\u8BDD\u201D\u53D1\u4E00\u6B21\u9700\u6C42\uFF0C\u5EFA\u7ACB\u65B0\u5173\u8054\u540E\u5373\u53EF\u7EE7\u7EED\u8FFD\u6539\u3002\u65E7\u6587\u4EF6\u4E0D\u81EA\u52A8\u5220\u9664\uFF0C\u6B64\u524D\u8BEF\u6302\u5E76\u4FDD\u5B58\u7684\u6807\u7B7E\u8BF7\u5173\u95ED\u4E00\u6B21\uFF1B\u591A\u4E2A\u4EFB\u52A1\u4E3B\u52A8\u5199\u540C\u4E00\u4E2A\u5B9E\u9645\u4F5C\u54C1\u6587\u4EF6\uFF0C\u6587\u4EF6\u5185\u5BB9\u4ECD\u53EF\u80FD\u4E92\u76F8\u8986\u76D6\u3002
+
+\u3010\u53D1\u5E03\u68C0\u67E5\u8865\u5168\u3011\u589E\u52A0\u684C\u9762\u8FDE\u63A5\u3001\u5206\u7EC4\u9009\u62E9\u3001\u9879\u76EE\u5F52\u5C5E\u3001\u4F1A\u8BDD\u9694\u79BB\u548C\u8865\u6302\u91CD\u8BD5\u56DE\u5F52\uFF0C\u53D1\u5E03\u6D41\u7A0B\u5171\u8FD0\u884C 98 \u9879\u6E90\u7801\u68C0\u67E5\uFF0C\u5E76\u7EE7\u7EED\u6838\u5BF9\u72EC\u7ACB\u5B89\u88C5\u3001\u5BA2\u6237\u7AEF\u52A0\u8F7D\u4E0E\u53CC\u5B89\u88C5\u5305\u4E00\u81F4\u6027\u3002\u8FD9\u4E9B\u68C0\u67E5\u7528\u4E8E\u51CF\u5C11\u53D1\u5E03\u9057\u6F0F\uFF0C\u4E0D\u80FD\u66FF\u4EE3\u771F\u5B9E\u9875\u9762\u548C\u6A21\u578B\u4EFB\u52A1\u9A8C\u6536\u3002
+
+\u3010\u517C\u5BB9\u4E0E\u9A8C\u8BC1\u8303\u56F4\u3011\u7F51\u9875\u7AEF\u517C\u5BB9\u58F0\u660E\u4EC5\u5217 DSH 0.1.1-rc.2\u30010.1.2-rc.1\u30010.2.0-rc.2\uFF1B\u684C\u9762\u7AEF\u8303\u56F4\u4E3A\u5DF2\u6D4B Windows \u5B98\u65B9\u684C\u9762\u7AEF + DSH 0.2.0-rc.2\u3002\u65E7\u7248\u6CBF\u7528\u6B64\u524D\u9875\u9762\u9A8C\u6536\u5E76\u8865\u4EE3\u7801\u56DE\u5F52\uFF0C\u672C\u8F6E\u672A\u91CD\u8DD1\u5B8C\u6574\u65E7\u7248 GUI\uFF1B\u684C\u9762\u4E3B\u8981\u4EA4\u4E92\u5DF2\u70B9\u6D4B\uFF0C\u539F\u5171\u76EE\u5F55\u4E32\u6302\u95EE\u9898\u5DF2\u7531\u7528\u6237\u53CD\u9988\u786E\u8BA4\u4FEE\u590D\uFF0C\u4F46\u672C\u7248\u6700\u7EC8\u5305\u5728\u6B63\u5F0F\u684C\u9762\u7AEF\u7684\u5B8C\u6574\u590D\u9A8C\u3001\u5B9E\u9645\u5BA1\u6279/\u5B50\u4EE3\u7406\u53CA\u6A21\u578B\u751F\u6210\u5230\u81EA\u52A8\u6302\u8F7D\u7684\u5B8C\u6574\u4E1A\u52A1\u9A8C\u6536\u4ECD\u5F85\u5B8C\u6210\u3002macOS \u5C1A\u672A\u771F\u673A\u9A8C\u8BC1\u3002
+
+\u3010\u5347\u7EA7\u4E0E\u6570\u636E\u3011\u7F51\u9875\u7AEF\u548C\u684C\u9762\u7AEF\u7684\u9879\u76EE\u3001\u5E03\u5C40\u3001\u5A92\u4F53\u53CA\u5916\u89C2\u8BBE\u7F6E\u6309\u5404\u81EA\u6D4F\u89C8\u5668\u6765\u6E90\u4FDD\u5B58\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u540C\u6B65\uFF1B\u5171\u7528 DSH_HOME \u4E5F\u4E0D\u610F\u5473\u7740\u8FD9\u4E9B\u754C\u9762\u6570\u636E\u5171\u7528\u3002\u5B89\u88C5\u524D\u5907\u4EFD\u91CD\u8981\u6570\u636E\u5E76\u6838\u5BF9\u5176\u4ED6\u63D2\u4EF6\u517C\u5BB9\u6027\uFF0C\u88C5\u5B8C\u5B8C\u6574\u91CD\u542F\u5BBF\u4E3B\uFF0C\u7F51\u9875\u7AEF\u518D\u5237\u65B0\u9875\u9762\uFF1B\u82E5\u4ECD\u52A0\u8F7D\u5931\u8D25\uFF0C\u8BF7\u4FDD\u7559\u7B2C\u4E00\u6761\u5B8C\u6574\u9519\u8BEF\u3002\u672C\u5DE5\u4F5C\u53F0\u5305\u4E0D\u5305\u542B\u5BBF\u4E3B\u6A21\u578B\u8BF7\u6C42 HTTP 400 \u7684\u4FEE\u590D\uFF1B\u516C\u5F00\u53D1\u5E03\u72B6\u6001\u4EE5 GitHub Release \u4E3A\u51C6\u3002
+
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+\u6B64\u524D\u7248\u672C\u8BF4\u660E\uFF08v0.3.4\uFF09
+
+\u{1F6E0}\uFE0F \u672C\u6B21\u66F4\u65B0\uFF1A\u9002\u914D DSH 0.2 \u7F51\u9875\u7AEF
+
+\u3010\u9879\u76EE\u4E0E\u4F1A\u8BDD\u8054\u52A8\u3011\u63A5\u5165\u65B0\u7248 DSH \u7684\u4F1A\u8BDD\u8BC6\u522B\u4E0E\u8DF3\u8F6C\u63A5\u53E3\uFF0C\u9002\u914D\u6253\u5F00\u7ED1\u5B9A\u9879\u76EE\u3001\u5173\u95ED\u9879\u76EE\u540E\u56DE\u5230\u539F\u4F1A\u8BDD\u3001\u63A7\u5236\u5BA4\u5361\u7247\u8DF3\u8F6C\u7B49\u5165\u53E3\uFF0C\u4E0D\u66FF\u6362\u5BBF\u4E3B\u5B98\u65B9\u7EC4\u4EF6\u3002
+
+\u3010\u65B0\u5EFA\u5BF9\u8BDD\u3011\u4FEE\u590D\u65B0\u7248 DSH \u4E2D\u53EA\u8BBE\u7F6E\u9879\u76EE\u8DEF\u5F84\u521B\u5EFA\u4F1A\u8BDD\uFF0C\u53EF\u80FD\u51FA\u73B0\u300C\u5BF9\u8BDD\u80FD\u6253\u5F00\uFF0C\u5374\u65E0\u6CD5\u8F93\u5165\u300D\u7684\u95EE\u9898\u3002\u65B0\u5EFA\u65F6\u5148\u901A\u8FC7\u5BBF\u4E3B\u767B\u8BB0\u6216\u590D\u7528\u5DE5\u4F5C\u533A\uFF0C\u518D\u521B\u5EFA\u4F1A\u8BDD\uFF1B\u9884\u8BBE\u4E0E\u6A21\u578B\u9009\u62E9\u4E5F\u63A5\u5165\u65B0\u7248\u63A5\u53E3\u3002\u6B64\u6539\u52A8\u4E0D\u81EA\u52A8\u8FC1\u79FB\u5DF2\u6709\u4F1A\u8BDD\u3002
+
+\u3010\u6807\u6CE8\u8F93\u5165\u3011\u9002\u914D\u65B0\u7248\u804A\u5929\u8F93\u5165\u6846\uFF0C\u901A\u8FC7\u5BBF\u4E3B\u63A5\u53E3\u8FFD\u52A0\u6807\u6CE8\uFF0C\u4FDD\u7559\u5DF2\u6709\u8349\u7A3F\u4E0E\u6587\u4EF6\u5F15\u7528\uFF0C\u4E0D\u81EA\u52A8\u53D1\u9001\uFF1B\u65E0\u6CD5\u5199\u5165\u65F6\u4ECD\u53EF\u590D\u5236\u5230\u526A\u8D34\u677F\u3002\u4FEE\u590D\u65E7\u7248\u5DF2\u6709\u6587\u4EF6\u5F15\u7528\u65F6\u8FFD\u52A0\u4F4D\u7F6E\u8BA1\u7B97\u9519\u8BEF\u7684\u95EE\u9898\uFF1B\u65E7\u7248\u8F93\u5165\u6846\u4FDD\u7559\u517C\u5BB9\u5206\u652F\uFF0C\u4E0D\u518D\u8BEF\u9009\u5DE5\u4F5C\u53F0\u81EA\u5DF1\u7684\u6807\u6CE8\u6846\u6216\u6587\u4EF6\u7F16\u8F91\u6846\u3002
+
+\u3010\u63A7\u5236\u5BA4\u72B6\u6001\u4E0E\u8BA1\u65F6\u3011\u9002\u914D\u65B0\u7248\u4F1A\u8BDD\u72B6\u6001\u3001\u5B50\u4EE3\u7406\u5217\u8868\u53CA\u6700\u8FD1\u6D88\u606F\u8BFB\u53D6\u3002\u652F\u6301\u8BC6\u522B\u65B0\u7684\u5F85\u786E\u8BA4\u4E8B\u9879\uFF1A\u786E\u8BA4\u8FC7\u4E0A\u4E00\u6761\u540E\uFF0C\u4E0B\u4E00\u6761\u4ECD\u4F1A\u91CD\u65B0\u4EAE\u8D77\u63D0\u9192\uFF1B\u8BA1\u65F6\u8BFB\u53D6\u5BBF\u4E3B\u5DF2\u6709\u7684\u4EFB\u52A1\u6216\u4F1A\u8BDD\u8D77\u70B9\uFF0C\u53D6\u4E0D\u5230\u6709\u6548\u8D77\u70B9\u65F6\u4E0D\u663E\u793A\uFF0C\u4E0D\u7F16\u9020\u8FD0\u884C\u65F6\u957F\u3002\u4EFB\u52A1\u505C\u6B62\u4E0D\u7B49\u4E8E\u4EFB\u52A1\u6210\u529F\u3002
+
+\u3010\u53D1\u9001\u4E0E\u6D88\u606F\u9884\u89C8\u3011\u9002\u914D\u65B0\u7248\u4F1A\u8BDD\u7684\u4E34\u65F6\u6301\u6709\u4E0E\u91CA\u653E\u673A\u5236\u3002\u53D1\u9001\u8BF7\u6C42\u5931\u8D25\u6216\u88AB\u62D2\u7EDD\u540E\uFF0C\u4E0D\u518D\u6362\u53E6\u4E00\u6761\u901A\u9053\u91CD\u590D\u53D1\u9001\uFF1B\u63A7\u5236\u5BA4\u9884\u89C8\u4ECE\u5BBF\u4E3B\u5DF2\u52A0\u8F7D\u7684\u6D88\u606F\u7A97\u53E3\u63D0\u53D6\u666E\u901A\u6587\u672C\uFF0C\u4E0D\u4EE3\u8868\u8BFB\u53D6\u4E86\u5B8C\u6574\u5386\u53F2\u3002
+
+\u3010\u6570\u636E\u4E0E\u5347\u7EA7\u3011\u672C\u6B21\u672A\u66F4\u540D\u6216\u8FC1\u79FB\u5DE5\u4F5C\u53F0\u7684\u9879\u76EE\u3001\u5E03\u5C40\u4E0E\u5A92\u4F53\u5B58\u50A8\uFF0C\u4E0D\u9700\u8981\u4E3A\u4E86\u672C\u6B21\u66F4\u65B0\u4E3B\u52A8\u6E05\u7A7A\u6D4F\u89C8\u5668\u6570\u636E\u3002\u5347\u7EA7\u524D\u8BF7\u5907\u4EFD\u914D\u7F6E\u53CA\u91CD\u8981\u6570\u636E\uFF0C\u786E\u8BA4\u5176\u4ED6\u63D2\u4EF6\u4E5F\u652F\u6301\u76EE\u6807 DSH \u7248\u672C\uFF1B\u5B89\u88C5\u540E\u5B8C\u6574\u9000\u51FA\u5E76\u91CD\u542F DSH\uFF0C\u518D\u5237\u65B0\u9875\u9762\u3002\u82E5\u4ECD\u52A0\u8F7D\u5931\u8D25\uFF0C\u8BF7\u4FDD\u7559\u5B8C\u6574\u9519\u8BEF\u4FE1\u606F\u53CD\u9988\uFF0C\u4E0D\u8981\u628A\u5B83\u5F53\u4F5C\u6B63\u5E38\u73B0\u8C61\u3002
+
+\u3010\u9A8C\u8BC1\u8303\u56F4\u3011\u672C\u8F6E\u5728 Windows + DSH 0.2.0-rc.2 \u7F51\u9875\u7AEF\u9A8C\u8BC1\u4E86\u51B7\u542F\u52A8\u3001\u5DE5\u4F5C\u53F0/\u63A7\u5236\u5BA4\u9875\u9762\u3001\u901A\u8FC7\u5DE5\u4F5C\u53F0\u65B0\u5EFA\u5E76\u7ED1\u5B9A\u5BF9\u8BDD\u3001\u53D1\u9001\u77ED\u6587\u672C\u5E76\u6536\u5230\u6A21\u578B\u56DE\u590D\u3001\u5173\u95ED\u9879\u76EE\u540E\u56DE\u5207\u4E0E\u91CD\u65B0\u6253\u5F00\uFF1B\u540C\u65F6\u8865\u5145\u65E7\u7248\u670D\u52A1\u56DE\u9000\u4E0E\u5F15\u7528\u5750\u6807\u7B49\u5B9A\u5411\u56DE\u5F52\u3002\u517C\u5BB9\u58F0\u660E\u4EC5\u5217 0.1.1-rc.2\u30010.1.2-rc.1\u30010.2.0-rc.2\uFF1B\u524D\u4E24\u4E2A\u7248\u672C\u6CBF\u7528\u6B64\u524D\u9875\u9762\u9A8C\u6536\u57FA\u7840\u5E76\u505A\u4EE3\u7801\u56DE\u5F52\uFF0C\u672C\u8F6E\u672A\u91CD\u8DD1\u6574\u5957\u65E7\u7248 GUI\uFF0C\u4E0D\u627F\u8BFA\u5176\u4ED6\u7248\u672C\u5168\u90E8\u517C\u5BB9\u3002
+
+\u3010\u5C1A\u672A\u95ED\u73AF\u3011\u5B9E\u9645\u5BA1\u6279/\u5B50\u4EE3\u7406\u6D41\u7A0B\u53CA\u81EA\u52A8\u6302\u8F7D\u5168\u94FE\u8DEF\u5C1A\u672A\u5B8C\u6210\u4E1A\u52A1\u9A8C\u6536\u3002\u5B98\u65B9\u684C\u9762\u7AEF\u5C1A\u672A\u9002\u914D\uFF0CmacOS \u5C1A\u672A\u771F\u673A\u9A8C\u8BC1\uFF1B\u672C\u6B21\u4E5F\u4E0D\u4EE3\u8868\u6240\u6709\u7528\u6237\u7684 DSH \u542F\u52A8\u5931\u8D25\u5DF2\u89E3\u51B3\u3002\u516C\u5F00\u53D1\u5E03\u4FE1\u606F\u4EE5 GitHub Release \u4E3A\u51C6\u3002
+
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+\u6B64\u524D\u7248\u672C\u8BF4\u660E\uFF08v0.3.3\uFF09
 
 \u{1F6E0}\uFE0F \u672C\u7248\u672C\u66F4\u65B0
 
@@ -8948,8 +9127,8 @@ var CHANGELOG_V030 = `\u66F4\u65B0\u516C\u544A \xB7 v0.3.3
 \u30103.1 \u6587\u5B57\u4E0E\u7EC6\u8282\u6253\u78E8\u3011\u5168\u5C40\u5B57\u4F53\u4E0E\u5B57\u53F7\u7EDF\u4E00\u4F18\u5316\u3001\u4E0B\u62C9\u9762\u677F\u73BB\u7483\u5316\u4E0E\u5BF9\u9F50\u3001\u83DC\u5355\u70B9\u9009\u540E\u4FDD\u6301\u6253\u5F00\u4FBF\u4E8E\u8FDE\u7EED\u9884\u89C8\u3001\u6309\u94AE\u63CF\u8FB9\u4E0E\u60AC\u505C\u53CD\u9988\u7B49\u4EA4\u4E92\u7EC6\u8282\uFF1B\u540C\u65F6\u4FEE\u590D\u4E86\u591A\u9879\u4F53\u9A8C\u95EE\u9898\uFF08\u7167\u7247\u4E0A\u4F20\u6E05\u6670\u5EA6\u3001\u80CC\u666F\u7F51\u683C\u7EBF\u5728\u7167\u7247\u6A21\u5F0F\u4E0B\u4E0D\u751F\u6548\u3001\u6D45\u8272\u4E3B\u9898\u4E0B\u5DE5\u4F5C\u72B6\u6001\u5149\u6548\u4E0D\u53EF\u89C1\u7B49\uFF09\u3002`;
 
 // src/client/updateCheck.ts
-var LOCAL_VERSION = false ? "dev" : "0.3.3";
-var UPDATE_REPO = "Aisland-SJL/dsh-worktable";
+var LOCAL_VERSION = false ? "dev" : "0.4.6";
+var UPDATE_REPO = "qiudl/dsh-worktable";
 var K_UPDATE_CHECK = "dsh.worktable.updateCheck.v1";
 var K_LAST_CHECK = "dsh.worktable.lastUpdateCheck.v1";
 var K_SKIP = "dsh.worktable.skipVersion.v1";
@@ -16868,7 +17047,15 @@ function basenameOf2(p) {
 function sameContent(a, b) {
   if (a.kind === "iframe" && b.kind === "iframe") return a.url === b.url;
   if (a.kind === "file" && b.kind === "file") return a.path === b.path;
-  if (a.kind === "builtin" && b.kind === "builtin") return a.type === b.type;
+  if (a.kind === "builtin" && b.kind === "builtin") {
+    if (a.type !== b.type) return false;
+    if (a.type === "browser" || a.type === "anim") {
+      const ua = (a.url ?? "").trim();
+      const ub = (b.url ?? "").trim();
+      return ua !== "" && ua === ub;
+    }
+    return true;
+  }
   return false;
 }
 var uiT = null;
@@ -17075,8 +17262,7 @@ function boxPayload(x0, y0, x1, y1) {
   }
   return { primary, line, candidates, limited, src };
 }
-var UPGRADE_CMD = 'dsh plugin --profile web add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"';
-var UPGRADE_AI = "\u5E2E\u6211\u5347\u7EA7 dsh-worktable\uFF1A\u6267\u884C " + UPGRADE_CMD + "\uFF0C\u5B8C\u6210\u540E\u63D0\u9192\u6211\u91CD\u542F dsh web \u5E76\u5237\u65B0\u9875\u9762";
+var { prompt: UPGRADE_AI } = worktableUpgrade();
 async function copyTextSafe(text2) {
   try {
     if (navigator.clipboard?.writeText) {
@@ -17098,24 +17284,7 @@ async function copyTextSafe(text2) {
   }
 }
 function fillHostInput(text2) {
-  try {
-    const ta = document.querySelector("textarea[data-phase]") ?? Array.from(document.querySelectorAll("textarea")).pop();
-    if (!ta) return false;
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-    const next = ta.value && ta.value.trim() ? ta.value + "\n\n" + text2 : text2;
-    if (setter) setter.call(ta, next);
-    else ta.value = next;
-    ta.dispatchEvent(new Event("input", { bubbles: true }));
-    try {
-      ta.focus();
-      ta.dispatchEvent(new Event("change", { bubbles: true }));
-      ta.setSelectionRange(ta.value.length, ta.value.length);
-    } catch {
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  return splitEnv?.fillHostInput(text2) ?? false;
 }
 function confirmAnnot() {
   const s = annotState;
@@ -17361,6 +17530,7 @@ var splitStore = {
   lastMarginRight: "",
   lastMarginTop: "",
   onSpecMutated: null,
+  onPaneContentEdited: null,
   listeners: /* @__PURE__ */ new Set(),
   open(spec) {
     if (this.active) {
@@ -17649,7 +17819,7 @@ var splitStore = {
   lockPane(row, i, content) {
     const spec = this.spec;
     if (!spec) return;
-    const tab = { id: "t" + Date.now().toString(36), title: tabTitleOf(content), content, active: 0 };
+    const tab = { id: "t" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2), title: tabTitleOf(content), content, active: 0 };
     const mutate = (pane) => ({ ...pane, content: null, tabs: [tab], active: 0 });
     if (row === "left") {
       if (!spec.left || i !== 0) return;
@@ -17673,6 +17843,8 @@ var splitStore = {
   setTabContent(row, index, tabId, content) {
     const spec = this.spec;
     if (!spec) return;
+    const edited = row === "left" ? spec.left : row === "top" ? spec.top?.[index] : spec.main[index];
+    if (edited?.tabs?.some((t) => t.id === tabId)) this.onPaneContentEdited?.(spec.id, edited.id);
     const mutate = (pane) => {
       const tabs = (pane.tabs ?? []).map((t) => t.id === tabId ? { ...t, content, title: tabTitleOf(content) } : t);
       return { ...pane, tabs };
@@ -17698,11 +17870,13 @@ var splitStore = {
   openTab(row, i, content) {
     const spec = this.spec;
     if (!spec) return;
+    const edited = row === "left" ? spec.left : row === "top" ? spec.top?.[i] : spec.main[i];
+    if (edited) this.onPaneContentEdited?.(spec.id, edited.id);
     const mutate = (pane) => {
       const tabs = [...pane.tabs ?? []];
       const existing = tabs.findIndex((t) => sameContent(t.content, content));
       if (existing >= 0) return { ...pane, content: null, tabs, active: existing };
-      const tab = { id: "t" + Date.now().toString(36), title: tabTitleOf(content), content };
+      const tab = { id: "t" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2), title: tabTitleOf(content), content };
       tabs.push(tab);
       return { ...pane, content: null, tabs, active: tabs.length - 1 };
     };
@@ -17724,9 +17898,36 @@ var splitStore = {
     this.persist();
     this.notify();
   },
+  setTabZoom(row, i, tabId, zoom) {
+    const spec = this.spec;
+    if (!spec) return;
+    const mutate = (pane) => ({
+      ...pane,
+      tabs: (pane.tabs ?? []).map((t) => t.id === tabId ? { ...t, content: { ...t.content, zoom } } : t)
+    });
+    if (row === "left") {
+      if (!spec.left || i !== 0) return;
+      this.spec = { ...spec, left: mutate(spec.left) };
+    } else if (row === "top") {
+      const top = [...spec.top ?? []];
+      if (!top[i]) return;
+      top[i] = mutate(top[i]);
+      this.spec = { ...spec, top };
+    } else {
+      const main = [...spec.main];
+      if (!main[i]) return;
+      main[i] = mutate(main[i]);
+      this.spec = { ...spec, main };
+    }
+    this.onSpecMutated?.(this.spec);
+    this.persist();
+    this.notify();
+  },
   closeTab(row, i, tabId) {
     const spec = this.spec;
     if (!spec) return;
+    const edited = row === "left" ? spec.left : row === "top" ? spec.top?.[i] : spec.main[i];
+    if (edited?.tabs?.some((t) => t.id === tabId)) this.onPaneContentEdited?.(spec.id, edited.id);
     const mutate = (pane) => {
       const tabs = (pane.tabs ?? []).filter((t) => t.id !== tabId);
       return { ...pane, tabs, active: 0 };
@@ -17764,6 +17965,8 @@ var splitStore = {
     if (!fromPane || !toPane) return;
     const tab = (fromPane.tabs ?? []).find((t) => t.id === tabId);
     if (!tab) return;
+    this.onPaneContentEdited?.(spec.id, fromPane.id);
+    this.onPaneContentEdited?.(spec.id, toPane.id);
     const fromTabs = (fromPane.tabs ?? []).filter((t) => t.id !== tabId);
     const toTabs = [...toPane.tabs ?? [], tab];
     const setPane = (row, i, pane) => {
@@ -17969,16 +18172,136 @@ function makeDividerHandler(kind, index) {
     target.addEventListener("pointercancel", onUp);
   };
 }
+var FRAME_LOGICAL_W = 1280;
+function frameGeometry(mode, wrapW, wrapH) {
+  if (mode === "100" || !(wrapW > 0) || !(wrapH > 0)) return { width: "100%", height: "100%", scale: 1 };
+  const logical = mode === "fit" ? Math.max(FRAME_LOGICAL_W, wrapW) : Math.max(FRAME_LOGICAL_W, wrapW / 1.25);
+  const scale = mode === "fit" ? Math.min(1, wrapW / logical) : 1.25;
+  return { width: logical, height: Math.max(1, Math.round(wrapH / scale)), scale };
+}
+function zoomOf(content) {
+  const z = content.kind === "builtin" ? content.zoom : void 0;
+  return z === "fit" || z === "125" ? z : "100";
+}
+function keepZoom(prev, next) {
+  const z = zoomOf(prev);
+  return z === "100" ? next : { ...next, zoom: z };
+}
+function normalizeAddress(input) {
+  const u = String(input ?? "").trim();
+  if (!u) return "about:blank";
+  if (/^(\/|https?:\/\/)/i.test(u)) return u;
+  if (/\s/.test(u)) return "about:blank";
+  if (/^localhost(:\d{1,5})?([/?#].*)?$/i.test(u)) return "https://" + u;
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d{1,5})?([/?#].*)?$/i.test(u)) return "https://" + u;
+  return "about:blank";
+}
+function FrameHost(props) {
+  const wrapRef = (0, import_react.useRef)(null);
+  const [box, setBox] = (0, import_react.useState)({ w: 0, h: 0 });
+  (0, import_react.useEffect)(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const update = () => setBox({ w: el.clientWidth, h: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const g = frameGeometry(zoomOf(props.content), box.w, box.h);
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: wrapRef, className: "dsh-wt_frameWrap", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+    "iframe",
+    {
+      className: "dsh-wt_paneFrame",
+      src: props.src,
+      title: props.title,
+      style: g.scale === 1 ? { width: g.width, height: g.height } : { width: g.width, height: g.height, transform: "scale(" + g.scale + ")", transformOrigin: "top left" }
+    },
+    props.reloadKey
+  ) });
+}
+function FrameZoomSelect(props) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+    "select",
+    {
+      className: "dsh-wt_browserZoom",
+      title: T("pane.zoom"),
+      "aria-label": T("pane.zoom"),
+      value: zoomOf(props.content),
+      onChange: (e) => splitStore.setTabZoom(props.row, props.index, props.tabId, e.target.value),
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "100", children: T("pane.zoom100") }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "fit", children: T("pane.zoomFit") }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "125", children: T("pane.zoom125") })
+      ]
+    }
+  );
+}
+function FrameActions(props) {
+  const [tip, setTip] = (0, import_react.useState)("");
+  const tipTimer = (0, import_react.useRef)(null);
+  const httpUrl = /^https?:\/\//i.test(props.url) ? props.url : "";
+  const showTip = (kind) => {
+    setTip(kind);
+    if (tipTimer.current !== null) window.clearTimeout(tipTimer.current);
+    tipTimer.current = window.setTimeout(() => {
+      tipTimer.current = null;
+      setTip("");
+    }, 2200);
+  };
+  (0, import_react.useEffect)(() => () => {
+    if (tipTimer.current !== null) window.clearTimeout(tipTimer.current);
+  }, []);
+  const openExternal = () => {
+    if (!httpUrl) return;
+    let opened = null;
+    try {
+      opened = window.open(httpUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      opened = null;
+    }
+    if (!opened) void copyTextSafe(httpUrl).then((ok) => showTip(ok ? "fallback" : "fail"));
+  };
+  const copyLink = () => {
+    if (httpUrl) void copyTextSafe(httpUrl).then((ok) => showTip(ok ? "ok" : "fail"));
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+      "button",
+      {
+        type: "button",
+        className: "dsh-wt_browserGo",
+        disabled: !httpUrl,
+        title: T("pane.openExternal"),
+        "aria-label": T("pane.openExternal"),
+        onClick: openExternal,
+        children: "\u21F1"
+      }
+    ),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+      "button",
+      {
+        type: "button",
+        className: "dsh-wt_browserGo",
+        disabled: !httpUrl,
+        title: T("pane.copyLink"),
+        "aria-label": T("pane.copyLink"),
+        onClick: copyLink,
+        children: "\u29C9"
+      }
+    ),
+    tip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-wt_browserTip" + (tip === "fail" ? " dsh-wt_browserTipFail" : ""), role: "status", children: tip === "ok" ? T("pane.copied") : tip === "fallback" ? T("pane.openFallback") : T("pane.copyFail") })
+  ] });
+}
 function BrowserPane(props) {
   const initial = props.content?.url || "https://example.com";
   const [url, setUrl] = (0, import_react.useState)(initial);
   const [src, setSrc] = (0, import_react.useState)(initial);
   const go = () => {
-    const u = url.trim();
-    const ok = /^(\/|https?:\/\/)/i.test(u) ? u : "about:blank";
+    const ok = normalizeAddress(url);
     setSrc(ok);
     if (ok !== "about:blank") {
-      splitStore.setTabContent(props.row, props.index, props.tabId, { kind: "builtin", type: "browser", url: ok });
+      splitStore.setTabContent(props.row, props.index, props.tabId, keepZoom(props.content, { kind: "builtin", type: "browser", url: ok }));
     }
   };
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -17995,9 +18318,11 @@ function BrowserPane(props) {
           }
         }
       ),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-wt_browserGo", onClick: go, children: "\u2197" })
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-wt_browserGo", onClick: go, children: "\u2197" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameActions, { url: src }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameZoomSelect, { row: props.row, index: props.index, tabId: props.tabId, content: props.content })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("iframe", { className: "dsh-wt_paneFrame", src, title: "browser" }, props.reloadKey)
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameHost, { content: props.content, reloadKey: props.reloadKey, src, title: "browser" })
   ] });
 }
 function IframePane(props) {
@@ -18008,11 +18333,10 @@ function AnimPane(props) {
   const [url, setUrl] = (0, import_react.useState)(initial);
   const [src, setSrc] = (0, import_react.useState)(initial || "about:blank");
   const go = () => {
-    const u = url.trim();
-    const ok = /^(\/|https?:\/\/)/i.test(u) ? u : "about:blank";
+    const ok = normalizeAddress(url);
     setSrc(ok);
     if (ok !== "about:blank") {
-      splitStore.setTabContent(props.row, props.index, props.tabId, { kind: "builtin", type: "anim", url: ok });
+      splitStore.setTabContent(props.row, props.index, props.tabId, keepZoom(props.content, { kind: "builtin", type: "anim", url: ok }));
     }
   };
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -18029,9 +18353,11 @@ function AnimPane(props) {
           }
         }
       ),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-wt_browserGo", onClick: go, children: "\u2197" })
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-wt_browserGo", onClick: go, children: "\u2197" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameActions, { url: src }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameZoomSelect, { row: props.row, index: props.index, tabId: props.tabId, content: props.content })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("iframe", { className: "dsh-wt_paneFrame", src, title: "anim" }, props.reloadKey)
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FrameHost, { content: props.content, reloadKey: props.reloadKey, src, title: "anim" })
   ] });
 }
 function ThemeIcon({ mode, size }) {
@@ -19132,9 +19458,8 @@ function TerminalPane() {
     focusTerm();
     el.addEventListener("pointerdown", focusTerm);
     const scope = splitEnv?.getScope?.();
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = proto + "//" + location.host + "/api/worktable/term?sessionId=" + encodeURIComponent(scope?.sessionId ?? "") + "&cwd=" + encodeURIComponent(scope?.cwd ?? "") + "&cols=80&rows=24";
     try {
+      const url = hostWebSocketUrl("/api/worktable/term?sessionId=" + encodeURIComponent(scope?.sessionId ?? "") + "&cwd=" + encodeURIComponent(scope?.cwd ?? "") + "&cols=80&rows=24");
       ws = new WebSocket(url);
     } catch {
       term.dispose();
@@ -19169,6 +19494,12 @@ function TerminalPane() {
       if (ws && ws.readyState === 1) ws.send(d);
     });
     const ro = new ResizeObserver(() => {
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        try {
+          term.refresh?.(0, Math.max(0, (term.rows ?? 24) - 1));
+        } catch {
+        }
+      }
       if (typeof term.fit === "function") {
         try {
           term.fit();
@@ -19344,7 +19675,7 @@ function SelectPop(props) {
   ] });
 }
 function CustomPane(props) {
-  const paneTitle = props.paneTitle ?? "";
+  const paneTitle = props.row === void 0 ? props.paneTitle ?? "" : windowLabelOf(props.row, props.index ?? 0).match(/^窗口\d+/)?.[0] ?? "";
   try {
     window.__dshLastCustomPaneTitle = paneTitle;
   } catch {
@@ -19359,6 +19690,7 @@ function CustomPane(props) {
   const [wsGroups, setWsGroups] = (0, import_react.useState)([]);
   const [groupMode, setGroupMode] = (0, import_react.useState)("none");
   const [groupId, setGroupId] = (0, import_react.useState)(null);
+  const groupTouchedRef = (0, import_react.useRef)(false);
   const [newGroupParent, setNewGroupParent] = (0, import_react.useState)("");
   const [newGroupName, setNewGroupName] = (0, import_react.useState)("");
   const [busy, setBusy] = (0, import_react.useState)(false);
@@ -19377,7 +19709,7 @@ function CustomPane(props) {
       setSessionId(flat.find((s) => s.isCurrent)?.id ?? flat[0]?.id ?? null);
       const curId = flat.find((s) => s.isCurrent)?.id;
       const home = curId ? (custom?.getWorkspaces?.() ?? []).find((w) => (w.sessionIds ?? []).includes(curId)) : null;
-      if (home) {
+      if (home && !groupTouchedRef.current) {
         setGroupMode("existing");
         setGroupId(home.id);
       }
@@ -19491,6 +19823,7 @@ function CustomPane(props) {
           }],
           placeholder: T("custom.group"),
           onChange: (id) => {
+            groupTouchedRef.current = true;
             if (id === "__none") setGroupMode("none");
             else if (id === "__new") setGroupMode("new");
             else {
@@ -19559,7 +19892,7 @@ function PaneTabBody(props) {
   if (content.type === "scm") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GitPane, {});
   if (content.type === "tasks") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JobsPane, {});
   if (content.type === "terminal") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TerminalPane, {});
-  if (content.type === "custom") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomPane, { paneTitle: props.paneTitle ?? "" });
+  if (content.type === "custom") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomPane, { paneTitle: props.paneTitle ?? "", row: props.row, index: props.index });
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-wt_paneWip", children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-wt_paneWipIcon", "aria-hidden": true, children: BUILTIN_ICONS[content.type] }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-wt_paneWipText", children: T("pane.wip") })
@@ -19574,6 +19907,27 @@ function PaneBody(props) {
   const tabs = pane.tabs ?? [];
   const active = Math.min(pane.active ?? 0, Math.max(0, tabs.length - 1));
   const [reloadKeys, setReloadKeys] = (0, import_react.useState)({});
+  const [addOpen, setAddOpen] = (0, import_react.useState)(false);
+  const [addPos, setAddPos] = (0, import_react.useState)(null);
+  const addBtnRef = (0, import_react.useRef)(null);
+  const addPopRef = (0, import_react.useRef)(null);
+  (0, import_react.useEffect)(() => {
+    if (!addOpen) return;
+    const onDown = (e) => {
+      const node = e.target;
+      if (node && (addBtnRef.current && addBtnRef.current.contains(node) || addPopRef.current && addPopRef.current.contains(node))) return;
+      setAddOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") setAddOpen(false);
+    };
+    document.addEventListener("mousedown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [addOpen]);
   if (tabs.length === 0) {
     return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PanePicker, { row, index });
   }
@@ -19583,61 +19937,90 @@ function PaneBody(props) {
   };
   const singleConsole = tabs.length === 1 && tabs[0].content?.kind === "builtin" && tabs[0].content.type === "console";
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-    !singleConsole && !pane.collapsed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-wt_tabBar", children: tabs.map((t, i) => {
-      const locked = t.content?.kind === "builtin" && t.content.type === "console";
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-        "span",
+    !singleConsole && !pane.collapsed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-wt_tabBar", children: [
+      tabs.map((t, i) => {
+        const locked = t.content?.kind === "builtin" && t.content.type === "console";
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "span",
+          {
+            className: "dsh-wt_tab" + (i === active ? " dsh-wt_tabOn" : ""),
+            title: t.title,
+            draggable: !locked,
+            onDragStart: (e) => {
+              dragTab = { row, index, tabId: t.id };
+              try {
+                e.dataTransfer.effectAllowed = "move";
+              } catch {
+              }
+            },
+            onDragEnd: () => {
+              dragTab = null;
+              setDropTarget(null);
+            },
+            onClick: () => splitStore.setActiveTab(row, index, t.id),
+            children: [
+              refreshableTab(t) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-wt_tabRefresh",
+                  title: T("pane.refresh"),
+                  "aria-label": T("pane.refresh"),
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    refreshTab(t);
+                  },
+                  children: "\u21BB"
+                }
+              ),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-wt_tabTitle", children: t.title }),
+              !locked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-wt_tabClose",
+                  title: T("pane.closeTab"),
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    splitStore.closeTab(row, index, t.id);
+                  },
+                  children: "\u2715"
+                }
+              )
+            ]
+          },
+          t.id
+        );
+      }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "button",
         {
-          className: "dsh-wt_tab" + (i === active ? " dsh-wt_tabOn" : ""),
-          title: t.title,
-          draggable: !locked,
-          onDragStart: (e) => {
-            dragTab = { row, index, tabId: t.id };
-            try {
-              e.dataTransfer.effectAllowed = "move";
-            } catch {
-            }
+          type: "button",
+          ref: addBtnRef,
+          className: "dsh-wt_tabAdd",
+          title: T("pane.addTab"),
+          "aria-label": T("pane.addTab"),
+          onClick: (e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setAddPos({ x: Math.max(8, Math.min(r.left, window.innerWidth - 208)), y: r.bottom + 4 });
+            setAddOpen((v) => !v);
           },
-          onDragEnd: () => {
-            dragTab = null;
-            setDropTarget(null);
-          },
-          onClick: () => splitStore.setActiveTab(row, index, t.id),
-          children: [
-            refreshableTab(t) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              "button",
-              {
-                type: "button",
-                className: "dsh-wt_tabRefresh",
-                title: T("pane.refresh"),
-                "aria-label": T("pane.refresh"),
-                onClick: (e) => {
-                  e.stopPropagation();
-                  refreshTab(t);
-                },
-                children: "\u21BB"
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-wt_tabTitle", children: t.title }),
-            !locked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              "button",
-              {
-                type: "button",
-                className: "dsh-wt_tabClose",
-                title: T("pane.closeTab"),
-                onClick: (e) => {
-                  e.stopPropagation();
-                  splitStore.closeTab(row, index, t.id);
-                },
-                children: "\u2715"
-              }
-            )
-          ]
-        },
-        t.id
-      );
-    }) }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneTabBody, { tab: tabs[active], row, index, paneTitle: pane.title, reloadKey: reloadKeys[tabs[active].id] ?? 0 })
+          children: "\uFF0B"
+        }
+      )
+    ] }),
+    addOpen && addPos && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: addPopRef, className: "dsh-wt_tabAddPop", style: { left: addPos.x, top: addPos.y }, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-wt_tabAddPopBody", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+      PanePicker,
+      {
+        row,
+        index,
+        onPick: (content) => {
+          setAddOpen(false);
+          splitStore.openTab(row, index, content);
+        }
+      }
+    ) }) }),
+    tabs.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-wt_tabWrap", hidden: i !== active, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneTabBody, { tab: t, row, index, paneTitle: pane.title, reloadKey: reloadKeys[t.id] ?? 0 }) }, t.id))
   ] });
 }
 function PanePicker(props) {
@@ -19657,7 +20040,13 @@ function PanePicker(props) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const pick = (content) => splitStore.openTab(props.row, props.index, content);
+  const pick = (content) => {
+    if (props.onPick) {
+      props.onPick(content);
+      return;
+    }
+    splitStore.openTab(props.row, props.index, content);
+  };
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { ref: hostRef, className: "dsh-wt_panePicker dsh-wt_panePicker-" + mode, children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { type: "button", className: "dsh-wt_panePick", onClick: () => pick({ kind: "builtin", type: "browser" }), children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { "aria-hidden": true, children: "\u{1F310}" }),
@@ -19940,6 +20329,372 @@ try {
 } catch {
 }
 
+// src/client/sessionCompat.ts
+function currentSessionOf(snapshot) {
+  if (typeof snapshot?.current === "string") return snapshot.current;
+  const rows = Object.values(snapshot?.byId ?? {});
+  return rows.find((row) => (row?.retainedBy?.mainView ?? 0) > 0)?.id ?? "";
+}
+function openHostSession(ctx, sessions, id) {
+  const ui = typeof ctx?.get === "function" ? ctx.get("uiWorkspace") : ctx?.uiWorkspace;
+  if (typeof ui?.openSession === "function") return ui.openSession(id);
+  if (typeof sessions?.open === "function") return sessions.open(id);
+  throw new Error("Host session navigation unavailable");
+}
+async function sendHostSession(bridge, id, text2) {
+  const sessions = bridge?.sessions;
+  const check = (result) => {
+    if (result?.kind === "error" || result?.ok === false) {
+      throw new Error(result.text || result.error?.message || result.error?.code || "Session submission rejected");
+    }
+  };
+  const send = async (session) => {
+    if (session && typeof bridge?.conversation?.sendSession === "function") {
+      check(await bridge.conversation.sendSession(session, text2, [], "queue"));
+      return;
+    }
+    if (session && typeof session.prompt === "function") {
+      check(await session.prompt([{ type: "text", text: text2 }], "queue"));
+      return;
+    }
+    const conv = sessions?.scope?.(id)?.get?.("conversation");
+    if (typeof conv?.send === "function") {
+      check(await conv.send(text2));
+      return;
+    }
+    throw new Error("no send path: session face unavailable");
+  };
+  if (typeof sessions?.using === "function") {
+    await sessions.using(id, { source: "dshWorktable" }, async (ref) => {
+      const binding = await ref.ready;
+      await send(binding.session);
+    });
+    return;
+  }
+  let face = null;
+  for (let i = 0; i < 10; i++) {
+    face = sessions?.binding?.(id)?.session;
+    if (face) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  await send(face);
+}
+function createSessionSnapshotAdapter() {
+  const previousRunning = /* @__PURE__ */ new Map();
+  const stopped = /* @__PURE__ */ new Set();
+  return (snapshot, statusSource) => {
+    if (!snapshot || typeof snapshot.current === "string") return snapshot;
+    const statuses = statusSource?.getSnapshot?.();
+    const byId = {};
+    const subagentsByParent = { ...snapshot.subagentsByParent };
+    for (const [id, row] of Object.entries(snapshot.byId ?? {})) {
+      const status = statuses?.get?.(id);
+      const running = status?.running ?? row.running;
+      if (running === true) stopped.delete(id);
+      else if (running === false && previousRunning.get(id) === true) stopped.add(id);
+      if (typeof running === "boolean") previousRunning.set(id, running);
+      byId[id] = {
+        ...row,
+        running,
+        pendingInteraction: status ? status.pendingInteraction : row.pendingInteraction,
+        // completionUnread clears when opening the main view. Keep a witnessed run-stop
+        // until the next run so an active project's widget-result handshake still runs.
+        completed: running !== true && (stopped.has(id) || status?.completionUnread === true || row.completed === true)
+      };
+      const children = snapshot.projectionsBySession?.[id]?.values?.subagentCatalog ?? row.projectionValues?.subagentCatalog;
+      if (Array.isArray(children)) subagentsByParent[id] = children;
+    }
+    if (snapshot.phase === "ready") {
+      for (const id of previousRunning.keys()) if (!byId[id]) {
+        previousRunning.delete(id);
+        stopped.delete(id);
+      }
+    }
+    return { ...snapshot, byId, subagentsByParent };
+  };
+}
+function childSessionIdsOf(snapshot, sid) {
+  const children = /* @__PURE__ */ new Set();
+  for (const [id, row] of Object.entries(snapshot?.byId ?? {})) {
+    if (id !== sid && row?.parentId === sid) children.add(id);
+  }
+  const catalog = snapshot?.subagentsByParent?.[sid];
+  const rows = Array.isArray(catalog) ? catalog : catalog?.entries ?? catalog?.items ?? [];
+  if (Array.isArray(rows)) for (const row of rows) {
+    const id = row?.sessionId ?? row?.id;
+    if (typeof id === "string" && id !== sid) children.add(id);
+  }
+  return children;
+}
+function pendingAckOf(snapshot, sid, legacyFace) {
+  const identities = [];
+  let identified = false;
+  const add = (id, pending) => {
+    if (pending == null) return;
+    const key = typeof pending?.key === "string" ? pending.key : "";
+    if (key) identified = true;
+    identities.push(JSON.stringify([id, String(pending?.kind ?? ""), key]));
+  };
+  const ids = [sid, ...childSessionIdsOf(snapshot, sid)];
+  for (const id of ids) add(id, snapshot?.byId?.[id]?.pendingInteraction);
+  if (snapshot?.byId?.[sid]?.pendingInteraction == null && Array.isArray(legacyFace?.pending)) {
+    for (const pending of legacyFace.pending) add(sid, pending);
+  }
+  if (!identities.length) return null;
+  return identified ? "need:" + JSON.stringify([...new Set(identities)].sort()) : "need";
+}
+function sessionRuntimeMs(snapshot, sid, sessions, uiConversation, now = Date.now()) {
+  if (snapshot?.byId?.[sid]?.running !== true) return null;
+  const validStart = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  let start = null;
+  for (const job of snapshot?.jobsBySession?.[sid] ?? []) {
+    if (job?.status === "running" && validStart(job.startedAt) && (start == null || job.startedAt < start)) start = job.startedAt;
+  }
+  if (start != null) return Math.max(0, now - start);
+  let timings;
+  try {
+    timings = uiConversation?.binding?.(sid)?.target?.("chat")?.getSnapshot?.()?.legacy?.turnTimings;
+  } catch {
+  }
+  if (timings == null) {
+    try {
+      timings = sessions?.binding?.(sid)?.session?.getSnapshot?.()?.turnTimings;
+    } catch {
+    }
+  }
+  const turns = typeof timings?.values === "function" ? Array.from(timings.values()) : Object.values(timings ?? {});
+  for (const turn of turns) {
+    if (turn?.endTime == null && validStart(turn?.startTime) && (start == null || turn.startTime > start)) start = turn.startTime;
+  }
+  return start == null ? null : Math.max(0, now - start);
+}
+
+// src/client/hostInput.ts
+function appendHostInput(bridge, text2, doc = document) {
+  try {
+    const resolver = bridge?.conversation?.input;
+    if (typeof resolver?.for === "function") {
+      const snapshot = bridge.sessions?.list?.getSnapshot?.();
+      const id = currentSessionOf(snapshot);
+      const scope = id ? bridge.sessions?.scope?.(id) : null;
+      if (!scope) return false;
+      const input = resolver.for(scope);
+      const state = input?.state?.getSnapshot?.();
+      if (!state || typeof state.draft !== "string" || !Number.isInteger(state.draftRev) || !["plain", "claimed"].includes(state.phase) || !Array.isArray(state.occurrences)) return false;
+      const compactReferences = typeof snapshot?.current !== "string";
+      let end = state.draft.length;
+      let previousEnd = 0;
+      for (const item of state.occurrences) {
+        if (!Number.isInteger(item.offset) || !Number.isInteger(item.length) || item.length < 0 || item.offset < previousEnd || item.offset + item.length > state.draft.length) return false;
+        previousEnd = item.offset + item.length;
+        if (compactReferences) end += 1 - item.length;
+      }
+      const span = { start: end, end, draftRev: state.draftRev };
+      const addition = (state.draft.trim() ? "\n\n" : "") + text2;
+      const inserted = typeof input.actions?.insertText === "function" ? input.actions.insertText(addition, span) === true : scope.bail?.("slash/input-insert-text", { text: addition, span }) === true;
+      if (inserted) {
+        try {
+          input.focus?.();
+        } catch {
+        }
+      }
+      return inserted;
+    }
+    const ta = doc.querySelector("textarea[data-phase]");
+    if (!ta || ta.disabled || ta.readOnly || ta.closest(".dsh-wt_annotUi")) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    const next = ta.value && ta.value.trim() ? ta.value + "\n\n" + text2 : text2;
+    if (setter) setter.call(ta, next);
+    else ta.value = next;
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    try {
+      ta.focus();
+      ta.dispatchEvent(new Event("change", { bubbles: true }));
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    } catch {
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// src/client/widgetMount.ts
+var WIDGET_BINDINGS_KEY = "dsh.worktable.widgetBindings.v2";
+function newWidgetId(prefix = "binding") {
+  const id = globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+  return prefix + "-" + id;
+}
+function widgetTargets(spec) {
+  if (!spec) return [];
+  const out = [];
+  const add = (row, panes) => panes.forEach((pane, index) => {
+    if (pane && typeof pane.id === "string") out.push({ row, index, pane, window: "\u7A97\u53E3" + (out.length + 1) });
+  });
+  add("left", spec.left ? [spec.left] : []);
+  add("top", spec.top ?? []);
+  add("main", spec.main ?? []);
+  return out;
+}
+function widgetManifestPath(binding) {
+  return joinPath(binding.folder, joinPath(".dsh-worktable", joinPath(
+    "project-" + encodeURIComponent(binding.projectId),
+    "pane-" + encodeURIComponent(binding.paneId) + "-" + binding.bindingId + ".json"
+  )));
+}
+var WidgetMountRegistry = class {
+  constructor(storage, makeId = () => newWidgetId()) {
+    this.storage = storage;
+    this.makeId = makeId;
+    try {
+      const data = JSON.parse(storage?.getItem(WIDGET_BINDINGS_KEY) ?? "{}");
+      for (const [projectId, panes] of Object.entries(data ?? {})) {
+        if (!panes || typeof panes !== "object" || Array.isArray(panes)) continue;
+        const valid = /* @__PURE__ */ Object.create(null);
+        for (const [paneId, b] of Object.entries(panes)) {
+          const v = b;
+          if (v?.projectId !== projectId || v.paneId !== paneId || typeof v.folder !== "string" || !v.folder || typeof v.sessionId !== "string" || !v.sessionId || typeof v.window !== "string" || typeof v.bindingId !== "string" || !/^[a-z0-9-]+$/i.test(v.bindingId) || typeof v.enabled !== "boolean") continue;
+          valid[paneId] = { ...v };
+        }
+        if (Object.keys(valid).length) this.records[projectId] = valid;
+      }
+    } catch {
+    }
+  }
+  records = /* @__PURE__ */ Object.create(null);
+  listeners = /* @__PURE__ */ new Set();
+  persist() {
+    this.storage?.setItem(WIDGET_BINDINGS_KEY, JSON.stringify(this.records));
+    for (const fn of this.listeners) fn();
+  }
+  subscribe(fn) {
+    this.listeners.add(fn);
+    return () => {
+      this.listeners.delete(fn);
+    };
+  }
+  entries(projectId) {
+    const projects = projectId ? [this.records[projectId] ?? {}] : Object.values(this.records);
+    return projects.flatMap((panes) => Object.values(panes)).filter((b) => b.enabled);
+  }
+  begin(projectId, spec, folder, sessionId, window2) {
+    if (!this.storage) throw new Error("project storage unavailable");
+    if (!folder || !sessionId || spec.id !== projectId) throw new Error("project folder or session unavailable");
+    const targets = widgetTargets(spec);
+    const selected = targets.find((t) => t.window === window2);
+    if (!selected || new Set(targets.map((t) => t.pane.id)).size !== targets.length) throw new Error("project window changed");
+    const before = this.records[projectId];
+    const next = /* @__PURE__ */ Object.create(null);
+    for (const t of targets) {
+      const old = before?.[t.pane.id];
+      next[t.pane.id] = t === selected || !old || old.folder !== folder || old.enabled && old.window !== t.window ? { projectId, paneId: t.pane.id, window: t.window, folder, sessionId, bindingId: this.makeId(), enabled: true } : old;
+    }
+    this.records[projectId] = next;
+    try {
+      this.persist();
+    } catch (error2) {
+      if (before) this.records[projectId] = before;
+      else delete this.records[projectId];
+      throw error2;
+    }
+    return this.entries(projectId).filter((b) => b.sessionId === sessionId);
+  }
+  revokePane(projectId, paneId) {
+    const b = this.records[projectId]?.[paneId];
+    if (!b || !b.enabled) return;
+    this.records[projectId] = { ...this.records[projectId], [paneId]: { ...b, enabled: false } };
+    try {
+      this.persist();
+    } catch {
+    }
+  }
+  revokeProject(projectId) {
+    if (!this.records[projectId]) return;
+    for (const b of this.entries(projectId)) this.revokePane(projectId, b.paneId);
+  }
+  isCurrent(binding, spec, folder) {
+    const current = this.records[binding.projectId]?.[binding.paneId];
+    return !!current?.enabled && current.bindingId === binding.bindingId && current.sessionId === binding.sessionId && current.folder === folder && binding.folder === folder && spec?.id === binding.projectId && widgetTargets(spec).filter((t) => t.pane.id === binding.paneId).length === 1;
+  }
+  resolve(binding, raw, spec, folder) {
+    if (!this.isCurrent(binding, spec, folder)) return null;
+    try {
+      const d = JSON.parse(raw);
+      if (!d || Array.isArray(d) || d.version !== 2 || d.projectId !== binding.projectId || d.paneId !== binding.paneId || d.bindingId !== binding.bindingId || d.window !== binding.window || !["html", "url", "file"].includes(d.kind) || typeof d.path !== "string" || !d.path.trim()) return null;
+      const target = widgetTargets(spec).find((t) => t.pane.id === binding.paneId);
+      return { target, item: { kind: d.kind, path: d.path.trim() } };
+    } catch {
+      return null;
+    }
+  }
+};
+
+// src/client/sessionDetails.ts
+function cleanPreviewText(raw) {
+  return String(raw ?? "").replace(/```[a-zA-Z0-9_+-]*[\s\S]*?```/g, " ").replace(/```[a-zA-Z0-9_+-]*[\s\S]*$/g, " ").replace(/`[^`\n]{1,200}`/g, " ").replace(/```/g, " ").replace(/\s+/g, " ").trim();
+}
+function previewFromEvents(entries) {
+  if (!Array.isArray(entries)) return "";
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const ev = entries[i]?.event;
+    if (ev?.type !== "user/message" && ev?.type !== "assistant/message") continue;
+    const data = ev.type === "assistant/message" ? ev.data?.message ?? ev.data : ev.data;
+    const blocks = data?.content ?? data?.blocks;
+    if (!Array.isArray(blocks)) continue;
+    const raw = blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n");
+    const text2 = cleanPreviewText(raw);
+    if (text2.length >= 8) return text2.slice(0, 220);
+  }
+  return "";
+}
+async function readSessionPreview(sessions, id) {
+  if (typeof sessions?.using === "function") {
+    return sessions.using(id, { source: "dshWorktablePreview" }, async (ref) => {
+      const binding = await ref.ready;
+      return previewFromEvents(binding.eventSource?.getSnapshot?.()?.entries);
+    });
+  }
+  const face = sessions?.binding?.(id)?.session;
+  if (typeof face?.history !== "function") return "";
+  const result = await face.history({ maxMessages: 6 });
+  return previewFromEvents(result?.result?.value?.events);
+}
+function presetApiOf(ctx, legacy) {
+  const api = typeof ctx?.get === "function" ? ctx.get("remote.agentPresets") : ctx?.remote?.agentPresets;
+  if (typeof api?.list !== "function" || typeof api?.select !== "function") return legacy;
+  return {
+    list: async () => ({ result: await api.list() }),
+    select: async ({ sessionId, agentPreset }) => ({ result: await api.select(sessionId, agentPreset) })
+  };
+}
+function modelApiOf(ctx, sessions, legacy) {
+  if (typeof sessions?.using !== "function") return legacy;
+  const resolver = typeof ctx?.get === "function" ? ctx.get("modelDirectories") : ctx?.modelDirectories;
+  if (typeof resolver?.directoryFor !== "function") return legacy;
+  const withDirectory = (id, operation) => sessions.using(id, { source: "dshWorktableModel" }, async (ref) => {
+    await ref.ready;
+    return operation(resolver.directoryFor(id));
+  });
+  return {
+    models: async ({ sessionId }) => withDirectory(sessionId, async (directory) => ({ result: { ok: true, value: await directory.load() } })),
+    selectModel: async ({ sessionId, ...selection }) => withDirectory(sessionId, async (directory) => ({ result: await directory.select(selection) }))
+  };
+}
+function blankSessionNeedsWorkspace(sessions, grouping) {
+  return grouping === "none" && typeof sessions?.using === "function";
+}
+async function createHostSession(sessions, workspaces, options = {}, grouping = "auto") {
+  if (grouping === "none") {
+    if (options.workspaceId) throw new Error("ungrouped session cannot specify a workspace");
+    return sessions.create(options);
+  }
+  if (options.workspaceId || typeof sessions?.using !== "function") return sessions.create(options);
+  const workspace = options.cwd ? await workspaces?.create?.({ path: options.cwd }) : await workspaces?.initializeDefault?.();
+  if (typeof workspace?.workspaceId !== "string" || !workspace.workspaceId) throw new Error("workspace unavailable for new session");
+  const { cwd: _cwd, ...rest } = options;
+  return sessions.create({ ...rest, workspaceId: workspace.workspaceId });
+}
+
 // src/client/photoStore.ts
 var DB_NAME = "dsh-worktable";
 var STORE = "photoRecords";
@@ -20104,10 +20859,9 @@ var WAVE_BG_B64 = "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAYEBQUFBAYFBQUHBgYHCQ8KCQgIC
 
 // src/client/index.tsx
 var import_jsx_runtime2 = require("react/jsx-runtime");
-var LOCAL_VERSION2 = false ? "dev" : "0.3.3";
-var UPDATE_REPO2 = "Aisland-SJL/dsh-worktable";
-var UPGRADE_CMD2 = 'dsh plugin --profile web add "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"';
-var UPGRADE_AI2 = "\u5E2E\u6211\u5347\u7EA7 dsh-worktable\uFF1A\u6267\u884C " + UPGRADE_CMD2 + "\uFF0C\u5B8C\u6210\u540E\u63D0\u9192\u6211\u91CD\u542F dsh web \u5E76\u5237\u65B0\u9875\u9762";
+var LOCAL_VERSION2 = false ? "dev" : "0.4.6";
+var UPDATE_REPO2 = "qiudl/dsh-worktable";
+var { command: UPGRADE_CMD, prompt: UPGRADE_AI2, desktop: DESKTOP_HOST } = worktableUpgrade();
 var ICON_SYNC = /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 16 16", "aria-hidden": true, children: [
   /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round", d: "M1.5 8a6.5 6.5 0 0 1 11.1-4.6L14.5 5" }),
   /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round", d: "M14.5 1.5V5h-3.5" }),
@@ -20140,6 +20894,72 @@ async function copyText(text2) {
 }
 var PERSIST_KEY2 = "dsh.worktable.view.v1";
 var PROJECTS_KEY = "dsh.worktable.projects.v1";
+var cloudStatePath = null;
+var CLOUD_SYNC_ENABLED = true;
+var CLOUD_PUSH_DEBOUNCE_MS = 800;
+async function loadCloudStatePath() {
+  try {
+    const r = await fetch("/api/worktable/local-paths", { cache: "no-store" });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const p = typeof d?.cloudState === "string" ? d.cloudState.trim() : "";
+    return p || null;
+  } catch {
+    return null;
+  }
+}
+var cloudStateGetter = null;
+var cloudPushTimer = null;
+var cloudLastPushError = "";
+var cloudHydrated = false;
+function projectsPopulated(p) {
+  if (!p || typeof p !== "object") return false;
+  const size = (v) => Array.isArray(v) ? v.length : v && typeof v === "object" ? Object.keys(v).length : 0;
+  const o = p;
+  return size(o.order) + size(o.layouts) + size(o.folders) + size(o.bindings) + size(o.shortcuts) + size(o.nameOverrides) + size(o.iconOverrides) + size(o.removed) > 0;
+}
+function scheduleCloudPush() {
+  if (!CLOUD_SYNC_ENABLED || !cloudStatePath || !cloudStateGetter || !cloudHydrated) return;
+  if (cloudPushTimer !== null) clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(() => {
+    cloudPushTimer = null;
+    try {
+      const get = cloudStateGetter;
+      const path = cloudStatePath;
+      if (!get || !path) return;
+      const content = JSON.stringify({ ...get(), updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 1);
+      void fetch("/api/worktable/write", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, content })
+      }).then(async (r) => {
+        if (r.ok) {
+          cloudLastPushError = "";
+          return;
+        }
+        const d = await r.json().catch(() => null);
+        cloudLastPushError = d && d.error || "HTTP " + r.status;
+      }).catch((e) => {
+        cloudLastPushError = String(e && e.message || e);
+      });
+    } catch {
+    }
+  }, CLOUD_PUSH_DEBOUNCE_MS);
+}
+async function fetchCloudState() {
+  const path = cloudStatePath;
+  if (!CLOUD_SYNC_ENABLED || !path) return null;
+  try {
+    const r = await fetch("/api/worktable/file?path=" + encodeURIComponent(path), { cache: "no-store" });
+    if (!r.ok) return null;
+    const raw = (await r.text()).trim();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 var MIN_TOP = 56;
 var SNAP_PX = 32;
 var LEGACY_BUMP_COOLDOWN = 15e3;
@@ -20178,7 +20998,7 @@ function buildLayout(presetId, name) {
   const top = Array.from({ length: def.topCount }, (_, i) => mk(def.leftCount + i));
   const main = Array.from({ length: def.contentCount }, (_, i) => mk(def.leftCount + def.topCount + i));
   return {
-    id: "layout-" + Date.now().toString(36),
+    id: newWidgetId("layout"),
     title: name,
     left: left ?? null,
     top: top.length > 0 ? top : null,
@@ -20391,7 +21211,7 @@ var sessionBridge = null;
 var clientCtx = null;
 var hostApi = null;
 async function ensureSessionPreset(sessionId) {
-  const api = hostApi?.agentPresets;
+  const api = presetApiOf(clientCtx, hostApi?.agentPresets);
   if (!api || typeof api.list !== "function" || typeof api.select !== "function") return;
   try {
     const listRes = await api.list({});
@@ -20447,7 +21267,7 @@ function pickInheritedModel(groups, baseModel) {
   return { provider: flat[0].provider, model: flat[0].model };
 }
 async function ensureSessionModel(sessionId) {
-  const api = hostApi?.sessions;
+  const api = modelApiOf(clientCtx, sessionBridge?.sessions, hostApi?.sessions);
   if (!api || typeof api.models !== "function" || typeof api.selectModel !== "function") return;
   try {
     const mRes = await api.models({ sessionId });
@@ -20457,7 +21277,7 @@ async function ensureSessionModel(sessionId) {
     let target = null;
     let effort;
     try {
-      const cur = sessionBridge?.list?.getSnapshot?.()?.current;
+      const cur = currentSessionOf(sessionBridge?.list?.getSnapshot?.());
       if (cur && cur !== sessionId) {
         const cRes = await api.models({ sessionId: cur });
         if (cRes?.result?.ok) {
@@ -20551,51 +21371,10 @@ function listWorkspaces() {
     return [];
   }
 }
-function cleanPreviewText(raw) {
-  let s = String(raw ?? "");
-  s = s.replace(/```[a-zA-Z0-9_+-]*[\s\S]*?```/g, " ");
-  s = s.replace(/```[a-zA-Z0-9_+-]*[\s\S]*$/g, " ");
-  s = s.replace(/`[^`\n]{1,200}`/g, " ");
-  s = s.replace(/```/g, " ");
-  s = s.replace(/\s+/g, " ").trim();
-  return s;
-}
 var previewCache = /* @__PURE__ */ new Map();
 var previewFetching = /* @__PURE__ */ new Set();
 var previewSweepBusy = false;
 var previewTimer = null;
-async function coldPreviewOf(face) {
-  if (!face || typeof face.history !== "function") return "";
-  const r1 = await face.history({ maxMessages: 6 });
-  const evs = r1?.result?.value?.events;
-  if (!Array.isArray(evs)) return "";
-  const textOf = (blocks) => {
-    let fallback = "";
-    if (!Array.isArray(blocks)) return "";
-    for (const b of blocks) {
-      const s = typeof b?.text === "string" ? b.text.trim() : "";
-      if (!s) continue;
-      if (b?.type === "text") return s;
-      if (!fallback) fallback = s;
-    }
-    return fallback;
-  };
-  for (let i = evs.length - 1; i >= 0; i--) {
-    const ev = evs[i]?.event;
-    if (!ev) continue;
-    const d = ev.data ?? {};
-    let raw = "";
-    if (ev.type === "user/message") raw = textOf(d.content ?? d.blocks);
-    else if (ev.type === "assistant/message") {
-      const m = d.message ?? d;
-      raw = textOf(m.content ?? m.blocks);
-    }
-    if (!raw) continue;
-    const clean = cleanPreviewText(raw);
-    if (clean.length >= 8) return clean.slice(0, 220);
-  }
-  return "";
-}
 async function sweepPreviews() {
   if (previewSweepBusy) return;
   previewSweepBusy = true;
@@ -20605,12 +21384,9 @@ async function sweepPreviews() {
       if (previewFetching.has(sid)) continue;
       previewFetching.add(sid);
       try {
-        const face = sessionBridge?.sessions?.binding?.(sid)?.session;
-        const txt = await coldPreviewOf(face);
-        if (txt) {
-          previewCache.set(sid, txt);
-          notifyConsole();
-        }
+        const txt = await readSessionPreview(sessionBridge?.sessions, sid);
+        previewCache.set(sid, txt);
+        notifyConsole();
       } catch {
       } finally {
         previewFetching.delete(sid);
@@ -20621,7 +21397,7 @@ async function sweepPreviews() {
   }
 }
 function schedulePreviewSweep() {
-  if (previewTimer != null) return;
+  if (previewSweepBusy || previewTimer != null) return;
   previewTimer = window.setTimeout(() => {
     previewTimer = null;
     sweepPreviews();
@@ -20629,7 +21405,9 @@ function schedulePreviewSweep() {
 }
 function lastTextOf(sid) {
   try {
-    const face = sessionBridge?.sessions?.binding?.(sid)?.session?.getSnapshot?.();
+    const binding = sessionBridge?.sessions?.binding?.(sid);
+    if (binding?.eventSource?.getSnapshot) return previewFromEvents(binding.eventSource.getSnapshot().entries);
+    const face = binding?.session?.getSnapshot?.();
     const nodes = face?.nodes ?? [];
     for (let i = nodes.length - 1; i >= 0; i--) {
       const n = nodes[i];
@@ -20656,7 +21434,7 @@ async function fetchSessionGroups() {
   try {
     const snap = sessionBridge?.list?.getSnapshot?.();
     const byId = snap?.byId ?? {};
-    const current = snap?.current ?? "";
+    const current = currentSessionOf(snap);
     const subKids = /* @__PURE__ */ new Set();
     try {
       const map2 = snap?.subagentsByParent ?? {};
@@ -20723,41 +21501,7 @@ function hideBindTip() {
 async function promptIntoSession(sessionId, text2) {
   const b = sessionBridge;
   if (!b) throw new Error("bridge unavailable");
-  const sessions = b.sessions;
-  let session = null;
-  for (let i = 0; i < 10; i++) {
-    try {
-      session = sessions?.binding?.(sessionId)?.session ?? null;
-    } catch {
-      session = null;
-    }
-    if (session) break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  if (session) {
-    if (typeof b.conversation?.sendSession === "function") {
-      try {
-        await b.conversation.sendSession(session, text2, [], "queue");
-        return;
-      } catch {
-      }
-    }
-    if (typeof session.prompt === "function") {
-      const result = await session.prompt([{ type: "text", text: text2 }], "queue");
-      if (result && result.ok) return;
-      if (result && !result.ok) throw new Error("session.prompt: " + (result.error?.code ?? "rejected") + (result.error?.message ? ": " + result.error.message : ""));
-    }
-  }
-  try {
-    const scoped = sessions?.scope?.(sessionId);
-    const conv = scoped?.get?.("conversation");
-    if (conv && typeof conv.send === "function") {
-      await conv.send(text2);
-      return;
-    }
-  } catch {
-  }
-  throw new Error("no send path: session face unavailable");
+  await sendHostSession(b, sessionId, text2);
 }
 var KNOWLEDGE_PACK = [
   "\u3010\u63D2\u4EF6\u77E5\u8BC6\u5305\xB7\u8BF7\u76F4\u63A5\u91C7\u7528\uFF0C\u4E0D\u8981\u91CD\u65B0\u4FA6\u5BDF\u63D2\u4EF6\u6E90\u7801\u3011",
@@ -20771,12 +21515,12 @@ var KNOWLEDGE_PACK = [
   "  \u754C\u9762\u5373\u53EF\u4E0E DSH \u539F\u751F\u98CE\u683C\u4E00\u81F4\uFF1B\u81EA\u9020\u6837\u5F0F\u63A7\u5236\u5728\u6700\u5C0F\u8303\u56F4\u3002",
   "- \u670D\u52A1\u7AEF\u80FD\u529B\uFF1A/api/worktable/fs\uFF08\u5217\u76EE\u5F55\uFF09\u3001/api/worktable/write\uFF08\u5199\u6587\u4EF6\uFF09\u3001/api/worktable/mkdir\uFF08\u5EFA\u76EE\u5F55\uFF09\u3001",
   "  /api/worktable/git\uFF08git \u72B6\u6001\uFF09\u3001/api/worktable/site\uFF08\u9759\u6001\u6258\u7BA1\uFF09\u3002",
-  "- \u6539\u5B8C\u63D2\u4EF6\u5728 01_content \u76EE\u5F55\u6267\u884C npm run build\uFF1B\u91CD\u542F dsh web \u6216\u6D4F\u89C8\u5668 F5 \u751F\u6548\u3002",
+  "- \u6539\u5B8C\u63D2\u4EF6\u5728 01_content \u76EE\u5F55\u6267\u884C npm run build\uFF1B\u7F51\u9875\u7AEF\u91CD\u542F dsh web \u5E76\u5237\u65B0\uFF0C\u684C\u9762\u7AEF\u5B8C\u6574\u9000\u51FA\u540E\u624B\u52A8\u91CD\u65B0\u6253\u5F00\u3002",
   "- \u6240\u6709\u4EA7\u51FA\u6587\u4EF6\u4E00\u5F8B\u653E\u8FDB\u672C\u4EFB\u52A1\u6807\u6CE8\u7684\u9879\u76EE\u6587\u4EF6\u5939\uFF0C\u4FDD\u6301\u7528\u6237\u76EE\u5F55\u5E72\u51C0\u3002",
   "- \u6807\u6CE8\u534F\u8BAE\uFF1A\u6536\u5230\u300C\u{1F4CC} \u6807\u6CE8-\u7A97\u53E3N \u2026\uFF08\u5750\u6807/\u5143\u7D20/\u6846\u5185\u6587\u5B57\u2026\uFF09\u2026\u300D= \u5DE5\u4F5C\u53F0\u6807\u6CE8\uFF08\u7A97\u53E3\u7F16\u53F7\u7EA6\u5B9A\uFF1A\u5DE6\u680F\u2192\u9876\u884C\u2192\u4E3B\u884C\uFF0C\u4ECE 1 \u8D77\uFF09\u3002",
   "  \u5904\u7406\uFF1A\u6807\u6CE8\u5DF2\u6807\u660E\u6846\u9009\u533A\u57DF\u4E0E\u300C\u6700\u53EF\u80FD\u76EE\u6807\u300D\u65F6\u76F4\u63A5\u4F5C\u7B54\u3001\u4E0D\u8981\u4E8C\u6B21\u8BE2\u95EE\uFF08\u4EC5\u5F53\u786E\u5B9E\u65E0\u6CD5\u4ECE\u6807\u6CE8\u5B9A\u4F4D\u65F6\u624D\u95EE\u4E00\u6B21\uFF09\uFF1B\u80FD\u67E5\u770B\u622A\u56FE\u6216\u6253\u5F00\u7A97\u53E3\u5219\u5148\u6838\u5B9E\u518D\u56DE\u7B54\u3002"
 ].join("\n");
-function buildWindowTaskText(projectId, projectName, windowLabel, requirement, folder, mode) {
+function buildWindowTaskText(projectId, projectName, windowLabel, requirement, folder, mode, widgetBindings = []) {
   const win = windowLabel || "\u4E00\u4E2A\u5185\u5BB9\u7A97";
   const folderLine = folder ? "\u9879\u76EE\u6587\u4EF6\u5939\uFF1A" + folder + "\uFF08\u672C\u9879\u76EE\u6240\u6709\u4EA7\u51FA\u6587\u4EF6\u4E00\u5F8B\u653E\u8FDB\u8FD9\u4E2A\u6587\u4EF6\u5939\uFF1B\u4E0D\u8981\u5199\u5230\u522B\u7684\u9ED8\u8BA4\u4F4D\u7F6E\uFF09\u3002" : "\u672C\u9879\u76EE\u6682\u672A\u8BBE\u7F6E\u4E13\u5C5E\u6587\u4EF6\u5939\uFF1A\u4EA7\u51FA\u6587\u4EF6\u5148\u5411\u7528\u6237\u786E\u8BA4\u5B58\u653E\u4F4D\u7F6E\uFF0C\u4E0D\u8981\u968F\u4FBF\u5199\u3002";
   const lines = [
@@ -20790,8 +21534,9 @@ function buildWindowTaskText(projectId, projectName, windowLabel, requirement, f
     "   - \u6587\u6863 / \u6F14\u793A\uFF08PPT\u3001\u62A5\u544A\u3001\u8868\u683C\uFF09\u2192 \u751F\u6210\u771F\u5B9E\u6587\u4EF6\uFF08.pptx / .md / .xlsx\uFF09\u653E\u8FDB\u9879\u76EE\u6587\u4EF6\u5939\uFF0C\u7528\u6237\u7528\u672C\u673A\u8F6F\u4EF6\u6253\u5F00\u7F16\u8F91\uFF1B",
     "   - \u89C6\u9891 / \u52A8\u753B \u2192 \u751F\u6210 .mp4 / .gif\uFF08\u6216 Lottie JSON\uFF09\u6587\u4EF6\u653E\u8FDB\u9879\u76EE\u6587\u4EF6\u5939\uFF1B",
     "   - \u5DE5\u4F5C\u53F0\u5DF2\u6709\u5185\u7F6E\u7A97\u80FD\u529B\uFF08\u8D44\u6E90\u7BA1\u7406\u5668 / \u7EC8\u7AEF / \u6D4F\u89C8\u5668 / \u52A8\u753B\u7AD9\uFF09\u2192 \u4E0D\u8981\u91CD\u590D\u9020\u8F6E\u5B50\uFF0C\u76F4\u63A5\u5EFA\u8BAE\u7528\u6237\u6539\u7528\u5185\u7F6E\u7A97\u3002",
-    "5. \u5B8C\u6210\u5185\u5BB9\u540E\uFF0C\u7528\u4E00\u4E24\u53E5\u8BDD\u544A\u77E5\u7528\u6237\u6302\u8F7D\u7ED3\u679C\uFF08\u4E0D\u8981\u63D0\u95EE\u3001\u4E0D\u8981\u7B49\u5F85\u7528\u6237\u786E\u8BA4\uFF09\uFF1A\u4F8B\u5982\u300C\u5DF2\u5B8C\u6210\u5E76\u81EA\u52A8\u6302\u5230\u300C" + win + "\u300D\u7A97\u53E3\uFF0C\u60F3\u8C03\u6574\u76F4\u63A5\u8BF4\uFF0C\u6211\u6539\u5B8C\u4F1A\u81EA\u52A8\u66F4\u65B0\u300D\u3002\u8BE5\u7A97\u53E3\u4F4D\u4E8E\u300C" + projectName + "\u300D\u9879\u76EE\u5185\uFF0C\u5982\u9700\u8981\u4E5F\u53EF\u534F\u52A9\u8BE5\u9879\u76EE\u540E\u7EED\u7684\u5176\u4ED6\u81EA\u5B9A\u4E49\u5DE5\u4F5C\u3002",
-    '6. \u5B8C\u6210\u540E\u5199\u5165\u300C\u4EA7\u7269\u6E05\u5355\u300D\u6587\u4EF6\uFF1A\u5728\u9879\u76EE\u6587\u4EF6\u5939\u91CC\u521B\u5EFA widget-result.json\u3002\u6302\u8F7D\u5355\u4E2A\u7A97\u53E3\u65F6\u5199\u5355\u5BF9\u8C61 {"window":"' + win + '","path":"\u4EA7\u7269\u76F8\u5BF9\u8DEF\u5F84","kind":"html"}\uFF1B\u4E00\u6B21\u6302\u8F7D\u591A\u4E2A\u7A97\u53E3\uFF08\u5982\u7A97\u53E31 + \u7A97\u53E32\uFF09\u65F6\u5199 JSON \u6570\u7EC4\uFF0C\u6BCF\u4E2A\u5143\u7D20\u4E3A\u4E0A\u8FF0\u5355\u5BF9\u8C61\uFF08\u53EF\u5F15\u7528\u591A\u4E2A\u4EA7\u7269\u6587\u4EF6\uFF09\u3002kind \u53EF\u9009 html\uFF08\u672C\u5730\u9875\u9762\uFF0Cpath \u76F8\u5BF9\u9879\u76EE\u6587\u4EF6\u5939\uFF09/ url\uFF08\u5916\u90E8\u94FE\u63A5\uFF0Cpath \u4E3A\u5B8C\u6574 URL\uFF09/ file\uFF08\u5176\u4ED6\u6587\u4EF6\uFF0Cpath \u76F8\u5BF9\u9879\u76EE\u6587\u4EF6\u5939\uFF09\u3002\u5199\u5B8C\u8FD9\u4E2A\u6587\u4EF6\uFF0C\u5DE5\u4F5C\u53F0\u4F1A\u81EA\u52A8\u628A\u4EA7\u7269\u6302\u8F7D\u8FDB\u6E05\u5355\u5BF9\u5E94\u7684\u5404\u4E2A\u7A97\u53E3\u5E76\u9501\u5B9A\u4FDD\u5B58\uFF0C\u7528\u6237\u65E0\u9700\u624B\u52A8\u64CD\u4F5C\uFF1B\u7528\u6237\u4E0B\u6B21\u6253\u5F00\u5DE5\u4F5C\u53F0\u65F6\u5404\u7A97\u53E3\u76F4\u63A5\u663E\u793A\u4EA7\u7269\uFF0C\u4E0D\u4F1A\u4E22\u5931\u6216\u91CD\u7F6E\u3002',
+    "5. \u5B8C\u6210\u540E\u7528\u4E00\u4E24\u53E5\u8BDD\u8BF4\u660E\u4F5C\u54C1\u4E0E\u76EE\u6807\u7A97\u53E3\u3002\u5199\u6E05\u5355\u4E0D\u4EE3\u8868\u754C\u9762\u5DF2\u786E\u8BA4\u6302\u8F7D\u6210\u529F\uFF1B\u53EA\u6709\u5B9E\u9645\u770B\u5230\u6302\u8F7D\u7ED3\u679C\u65F6\uFF0C\u624D\u8BF4\u300C\u5DF2\u6302\u8F7D\u300D\u3002\u8BE5\u7A97\u53E3\u5C5E\u4E8E\u300C" + projectName + "\u300D\u9879\u76EE\u3002",
+    "6. \u4EA7\u7269\u63E1\u624B v2\uFF1A\u53EA\u4F7F\u7528\u4E0B\u5217\u672C\u9879\u76EE\u4E13\u5C5E\u6E05\u5355\u8DEF\u5F84\uFF0C\u4E0D\u8BFB\u5199\u9879\u76EE\u6839\u76EE\u5F55\u65E7\u7684 widget-result.json\uFF0C\u4E5F\u4E0D\u8981\u590D\u7528\u5176\u4ED6\u9879\u76EE\u7684\u6E05\u5355\u3002\u4F5C\u54C1\u4ECD\u653E\u5728\u9879\u76EE\u6587\u4EF6\u5939\uFF0Cpath \u6309\u8BE5\u6587\u4EF6\u5939\u89E3\u6790\u3002\u5148\u5B8C\u6210\u4F5C\u54C1\uFF0C\u518D\u521B\u5EFA\u6E05\u5355\u7236\u76EE\u5F55\u5E76\u5199\u5165\u5BF9\u5E94 JSON\uFF1Bkind \u4E3A html / url / file\uFF0C\u66FF\u6362\u793A\u4F8B\u4E2D\u7684 path \u4E0E kind\uFF0C\u5176\u4ED6\u8EAB\u4EFD\u5B57\u6BB5\u4FDD\u6301\u539F\u6837\u3002\u4E00\u6B21\u751F\u6210\u591A\u4E2A\u7A97\u53E3\u65F6\u5206\u522B\u5199\u5404\u7A97\u53E3\u7684\u6E05\u5355\u3002\u4EE5\u540E\u5728\u672C\u4F1A\u8BDD\u91CC\u7EE7\u7EED\u4FEE\u6539\u540C\u540D\u4F5C\u54C1\uFF0C\u4ECD\u66F4\u65B0\u8FD9\u4E2A\u6E05\u5355\uFF1B\u4E0D\u5F97\u6839\u636E\u6E05\u5355\u6587\u4EF6\u540D\u53D8\u5316\u4E0E\u5426\u5224\u65AD\u662F\u5426\u5B8C\u6210\u3002",
+    widgetBindings.length ? widgetBindings.map((b) => b.window + "\uFF1A" + widgetManifestPath(b) + "\n" + JSON.stringify({ version: 2, projectId: b.projectId, paneId: b.paneId, bindingId: b.bindingId, window: b.window, path: "\u4EA7\u7269\u76F8\u5BF9\u8DEF\u5F84", kind: "html" })).join("\n") : "\u5F53\u524D\u6CA1\u6709\u6709\u6548\u7684\u81EA\u52A8\u6302\u8F7D\u7ED1\u5B9A\uFF0C\u8BF7\u7528\u6237\u4ECE\u76EE\u6807\u7A97\u53E3\u91CD\u65B0\u53D1\u9001\u81EA\u5B9A\u4E49\u4EFB\u52A1\uFF1B\u4E0D\u8981\u5199\u65E7\u6E05\u5355\u731C\u6D4B\u5F52\u5C5E\u3002",
     KNOWLEDGE_PACK
   ];
   return lines.join("\n");
@@ -20799,7 +21544,6 @@ function buildWindowTaskText(projectId, projectName, windowLabel, requirement, f
 async function createCustomSession(projectId, projectName, requirement, group, windowLabel = "", folder = null) {
   const b = sessionBridge;
   if (!b || typeof b.sessions?.create !== "function") throw new Error("sessions unavailable");
-  const text2 = buildWindowTaskText(projectId, projectName, windowLabel, requirement, folder, "new");
   let workspaceId = null;
   const g = group ?? { kind: "none" };
   if (g.kind === "existing") {
@@ -20828,24 +21572,27 @@ async function createCustomSession(projectId, projectName, requirement, group, w
   let createOpts = {};
   if (workspaceId) createOpts = { workspaceId };
   else if (folder) createOpts = { cwd: folder };
-  const sessionId = await b.sessions.create(createOpts);
+  const sessionId = await createHostSession(b.sessions, b.workspaces, createOpts, g.kind === "none" ? "none" : "auto");
   await ensureSessionPreset(sessionId);
   await ensureSessionModel(sessionId);
   markPluginSessionOpen(sessionId);
   try {
-    await b.sessions.open?.(sessionId);
+    await openHostSession(clientCtx, b.sessions, sessionId);
   } catch {
   }
+  const widgetBindings = prepareWidgetTask(projectId, folder, sessionId, windowLabel);
+  const text2 = buildWindowTaskText(projectId, projectName, windowLabel, requirement, folder, "new", widgetBindings);
   await promptIntoSession(sessionId, text2);
   return sessionId;
 }
 async function sendCustomToSession(sessionId, projectId, projectName, requirement, windowLabel = "", folder = null) {
   const b = sessionBridge;
   if (!b) throw new Error("bridge unavailable");
-  const text2 = buildWindowTaskText(projectId, projectName, windowLabel, requirement, folder, "send");
+  const widgetBindings = prepareWidgetTask(projectId, folder, sessionId, windowLabel);
+  const text2 = buildWindowTaskText(projectId, projectName, windowLabel, requirement, folder, "send", widgetBindings);
   markPluginSessionOpen(sessionId);
   try {
-    await b.sessions.open?.(sessionId);
+    await openHostSession(clientCtx, b.sessions, sessionId);
   } catch {
   }
   await promptIntoSession(sessionId, text2);
@@ -20882,50 +21629,146 @@ function saveNotifyAck(sid, state) {
   }
 }
 var mountConsumedRef = { current: /* @__PURE__ */ new Set() };
+var widgetRegistry = new WidgetMountRegistry((() => {
+  try {
+    return localStorage;
+  } catch {
+    return null;
+  }
+})());
+var widgetProjectOf = () => ({});
+function prepareWidgetTask(projectId, folder, sessionId, windowLabel) {
+  if (!folder) return [];
+  const current = widgetProjectOf(projectId);
+  if (!folder || current.folder !== folder || !current.spec) throw new Error("project folder or window changed");
+  return widgetRegistry.begin(projectId, current.spec, folder, sessionId, windowLabel);
+}
 var pendingMountRef = { current: (() => {
   try {
-    return JSON.parse(localStorage.getItem("dsh.worktable.pendingMount.v1") ?? "{}") ?? {};
+    return JSON.parse(localStorage.getItem("dsh.worktable.pendingMount.v2") ?? "{}") ?? {};
   } catch {
     return {};
   }
 })() };
 var mountedWidgetRef = { current: (() => {
   try {
-    return JSON.parse(localStorage.getItem("dsh.worktable.mountedWidget.v1") ?? "{}") ?? {};
+    return JSON.parse(localStorage.getItem("dsh.worktable.mountedWidget.v2") ?? "{}") ?? {};
   } catch {
     return {};
   }
 })() };
-function recordMountedWidget(projectId, raw) {
-  if (!projectId || !raw) return;
-  mountedWidgetRef.current[projectId] = raw;
+var widgetReadSeqRef = { current: {} };
+function recordMountedWidget(bindingId, raw) {
+  if (!bindingId || !raw) return;
+  mountedWidgetRef.current[bindingId] = raw;
   try {
-    localStorage.setItem("dsh.worktable.mountedWidget.v1", JSON.stringify(mountedWidgetRef.current));
+    localStorage.setItem("dsh.worktable.mountedWidget.v2", JSON.stringify(mountedWidgetRef.current));
   } catch {
   }
 }
-function windowLabelToPane(spec, label) {
-  const m = /^窗口(\d+)$/.exec(String(label ?? "").trim());
-  if (!m) return null;
-  const n = parseInt(m[1], 10);
-  if (!Number.isFinite(n) || n < 1) return null;
-  let idx = n - 1;
-  if (spec?.left) {
-    if (idx === 0) return { row: "left", index: 0 };
-    idx -= 1;
+function persistPendingWidgets() {
+  try {
+    localStorage.setItem("dsh.worktable.pendingMount.v2", JSON.stringify(pendingMountRef.current));
+  } catch {
   }
-  const top = spec?.top ?? [];
-  if (idx < top.length) return { row: "top", index: idx };
-  idx -= top.length;
-  const main = spec?.main ?? [];
-  if (idx < main.length) return { row: "main", index: idx };
-  return null;
 }
-function paneExists(spec, row, index) {
-  if (!spec) return false;
-  if (row === "left") return !!spec.left && index === 0;
-  if (row === "top") return !!spec.top && !!spec.top[index];
-  return !!spec.main && !!spec.main[index];
+function invalidateWidgetProject(projectId) {
+  widgetRegistry.revokeProject(projectId);
+  for (const [id, pending] of Object.entries(pendingMountRef.current)) {
+    if (pending?.binding?.projectId === projectId) delete pendingMountRef.current[id];
+  }
+  persistPendingWidgets();
+}
+var RAIL_NAV_KEY = "dsh.worktable.railNav.v1";
+var PROJECT_CARD_SELECTOR = "button:not(.dsh-wt_layout):not(.dsh-wt_subNavItem)";
+var pendingRailTab = /* @__PURE__ */ Object.create(null);
+var pendingOpenCfg = /* @__PURE__ */ Object.create(null);
+function loadRailNavs() {
+  try {
+    const d = JSON.parse(localStorage.getItem(RAIL_NAV_KEY) ?? "{}");
+    return d && typeof d === "object" && !Array.isArray(d) ? d : {};
+  } catch {
+    return {};
+  }
+}
+function saveRailNavs(v) {
+  try {
+    localStorage.setItem(RAIL_NAV_KEY, JSON.stringify(v));
+  } catch {
+  }
+}
+var stripHash = (u) => String(u).split("#")[0];
+function eachPane(spec, fn) {
+  if (!spec) return;
+  if (Array.isArray(spec.top)) spec.top.forEach((p, i) => fn(p, "top", i));
+  if (Array.isArray(spec.main)) spec.main.forEach((p, i) => fn(p, "main", i));
+  if (spec.left) fn(spec.left, "left", 0);
+}
+function specHasIframeUrl(spec, url) {
+  let hit = false;
+  const target = stripHash(url);
+  eachPane(spec, (pane) => {
+    if (pane?.content?.kind === "iframe" && stripHash(pane.content.url ?? "") === target) hit = true;
+    if (Array.isArray(pane?.tabs)) pane.tabs.forEach((t) => {
+      if (t?.content?.kind === "iframe" && stripHash(t.content.url ?? "") === target) hit = true;
+    });
+  });
+  return hit;
+}
+function artifactUrlIn(spec) {
+  let found = null;
+  eachPane(spec, (pane) => {
+    if (found) return;
+    if (pane?.content?.kind === "iframe" && pane.content.url) {
+      found = pane.content.url;
+      return;
+    }
+    if (Array.isArray(pane?.tabs)) for (const t of pane.tabs) {
+      if (t?.content?.kind === "iframe" && t.content.url) {
+        found = t.content.url;
+        break;
+      }
+    }
+  });
+  return found;
+}
+function siteDirOf(url) {
+  const m = /^\/api\/worktable\/site\/([^/]+)\//.exec(String(url || ""));
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return null;
+  }
+}
+function specWithTabHash(spec, url, tabId) {
+  const target = stripHash(url);
+  const next = JSON.parse(JSON.stringify(spec));
+  eachPane(next, (pane) => {
+    if (pane?.content?.kind === "iframe" && stripHash(pane.content.url ?? "") === target) pane.content.url = target + "#tab=" + tabId;
+    if (Array.isArray(pane?.tabs)) pane.tabs.forEach((t, i) => {
+      if (t?.content?.kind === "iframe" && stripHash(t.content.url ?? "") === target) {
+        t.content.url = target + "#tab=" + tabId;
+        pane.active = i;
+      }
+    });
+  });
+  return next;
+}
+function applyTabHashToFrame(url, tabId) {
+  const target = stripHash(url);
+  try {
+    for (const f of Array.from(document.querySelectorAll("iframe.dsh-wt_paneFrame"))) {
+      if (stripHash(f.getAttribute("src") ?? "") !== target) continue;
+      const w = f.contentWindow;
+      if (w && w.location) {
+        w.location.hash = "#tab=" + tabId;
+        return true;
+      }
+    }
+  } catch {
+  }
+  return false;
 }
 function buildMountContent(folder, d) {
   const p = String(d?.path ?? "").trim();
@@ -20955,10 +21798,21 @@ function sessionNotifyState(entry) {
   if (entry.completed === true) return "done";
   return null;
 }
+var sessionStatusSource = null;
+var sessionConversationSource = null;
+var adaptSessionSnapshot = createSessionSnapshotAdapter();
+function pendingAckForSession(sid) {
+  let face;
+  try {
+    face = sessionBridge?.sessions?.binding?.(sid)?.session?.getSnapshot?.();
+  } catch {
+  }
+  return pendingAckOf(sessionsSnapshotStore.snapshot, sid, face);
+}
 function syncSessionScope(list2) {
   try {
-    const snap = list2.getSnapshot();
-    const current = snap?.current ?? "";
+    const snap = adaptSessionSnapshot(list2.getSnapshot(), sessionStatusSource);
+    const current = currentSessionOf(snap);
     const entry = snap?.byId?.[current] ?? snap?.items?.find((it) => it.sessionId === current) ?? null ?? null;
     const cat = snap?.subagentsByParent?.[current];
     let subagents = [];
@@ -21060,6 +21914,78 @@ function WorktableSection(props) {
   const [registeredIds, setRegisteredIds] = (0, import_react2.useState)(() => [...registryStore.ids]);
   const [addOpen, setAddOpen] = (0, import_react2.useState)(false);
   const [viewOptionsOpen, setViewOptionsOpen] = (0, import_react2.useState)(false);
+  const [cloudBusy, setCloudBusy] = (0, import_react2.useState)("");
+  const [cloudStatus, setCloudStatus] = (0, import_react2.useState)("");
+  const [cloudMeta, setCloudMeta] = (0, import_react2.useState)(null);
+  const loadCloudMeta = async () => {
+    const cloud = await fetchCloudState();
+    const pr = cloud && cloud.projects;
+    setCloudMeta({ path: cloudStatePath, updatedAt: cloud?.updatedAt, layouts: Array.isArray(pr?.layouts) ? pr.layouts.length : 0 });
+  };
+  (0, import_react2.useEffect)(() => {
+    if (viewOptionsOpen) void loadCloudMeta();
+  }, [viewOptionsOpen]);
+  const cloudRestoreNow = async () => {
+    setCloudBusy("restore");
+    setCloudStatus("");
+    try {
+      if (!cloudStatePath) {
+        setCloudStatus(t("cloud.notConfigured"));
+        return;
+      }
+      const cloud = await fetchCloudState();
+      if (!cloud || !cloud.projects && !cloud.view) {
+        setCloudStatus(t("cloud.empty"));
+        return;
+      }
+      try {
+        const cur = localStorage.getItem(PROJECTS_KEY);
+        if (cur) localStorage.setItem(PROJECTS_KEY + ".bak-" + Date.now(), cur);
+      } catch {
+      }
+      if (cloud.projects) {
+        try {
+          localStorage.setItem(PROJECTS_KEY, JSON.stringify(cloud.projects));
+        } catch {
+        }
+      }
+      if (cloud.view) {
+        try {
+          localStorage.setItem(PERSIST_KEY2, JSON.stringify(cloud.view));
+        } catch {
+        }
+      }
+      setView(loadView());
+      setProjects(loadProjects());
+      const n = Array.isArray(cloud.projects?.layouts) ? cloud.projects.layouts.length : 0;
+      setCloudStatus(t("cloud.restored", { n: String(n) }));
+      void loadCloudMeta();
+    } catch {
+      setCloudStatus(t("cloud.failed"));
+    } finally {
+      setCloudBusy("");
+    }
+  };
+  const cloudPushNow = async () => {
+    setCloudBusy("push");
+    setCloudStatus("");
+    try {
+      const path = cloudStatePath;
+      if (!path) {
+        setCloudStatus(t("cloud.notConfigured"));
+        return;
+      }
+      const content = JSON.stringify({ view: viewRef.current, projects: projectsRef.current.projects, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 1);
+      const r = await fetch("/api/worktable/write", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, content }) });
+      const d = await r.json().catch(() => null);
+      setCloudStatus(d && d.ok ? t("cloud.pushed") : t("cloud.failed"));
+      if (d && d.ok) void loadCloudMeta();
+    } catch {
+      setCloudStatus(t("cloud.failed"));
+    } finally {
+      setCloudBusy("");
+    }
+  };
   const [updateInfo, setUpdateInfo] = (0, import_react2.useState)(null);
   const [updateCheckOn, setUpdateCheckOn] = (0, import_react2.useState)(() => localStorage.getItem("dsh.worktable.updateCheck.v1") !== "0");
   const [updateCopied, setUpdateCopied] = (0, import_react2.useState)(false);
@@ -21159,6 +22085,7 @@ function WorktableSection(props) {
   const [consoleName, setConsoleName] = (0, import_react2.useState)("");
   const [consoleErr, setConsoleErr] = (0, import_react2.useState)(false);
   const [consoleBusy, setConsoleBusy] = (0, import_react2.useState)(false);
+  const consoleNeedsWorkspace = blankSessionNeedsWorkspace(sessionBridge?.sessions, consoleMode === "none" ? "none" : "auto");
   const [customOpen, setCustomOpen] = (0, import_react2.useState)(false);
   const [customLayoutText, setCustomLayoutText] = (0, import_react2.useState)("");
   const [copiedToast, setCopiedToast] = (0, import_react2.useState)(null);
@@ -21190,32 +22117,13 @@ function WorktableSection(props) {
     const pr = projectsRef.current;
     const snap = sessionsSnapshotStore.snapshot;
     const byId = snap?.byId ?? {};
-    const jobsMap = snap?.jobsBySession ?? {};
     const now = Date.now();
-    const kidsSetOf = (sid) => {
-      const set = /* @__PURE__ */ new Set();
-      for (const [cid, ce] of Object.entries(byId)) if (ce?.parentId === sid) set.add(cid);
-      const v = (snap?.subagentsByParent ?? {})[sid];
-      const arr = Array.isArray(v) ? v : v?.entries ?? v?.items ?? [];
-      if (Array.isArray(arr)) arr.forEach((c) => {
-        const cid = c?.sessionId ?? c?.id;
-        if (typeof cid === "string") set.add(cid);
-      });
-      return set;
-    };
+    const kidsSetOf = (sid) => childSessionIdsOf(snap, sid);
     const statusOf = (sid) => {
       if (!sid) return "idle";
       const e = byId[sid];
       if (!e) return "idle";
-      if (sessionNotifyState(e) === "need") return "need";
-      for (const cid of kidsSetOf(sid)) {
-        if (byId[cid] && sessionNotifyState(byId[cid]) === "need") return "need";
-      }
-      try {
-        const face = sessionBridge?.sessions?.binding?.(sid)?.session?.getSnapshot?.();
-        if (Array.isArray(face?.pending) && face.pending.length > 0) return "need";
-      } catch {
-      }
+      if (pendingAckForSession(sid) != null) return "need";
       if (e.completed === true) return "done";
       try {
         const face = sessionBridge?.sessions?.binding?.(sid)?.session?.getSnapshot?.();
@@ -21227,36 +22135,13 @@ function WorktableSection(props) {
     };
     const runtimeOf = (sid) => {
       if (!sid) return null;
-      const e = byId[sid];
-      if (!e || e.running !== true) return null;
-      let start = null;
-      const jobs = jobsMap[sid] ?? [];
-      for (const j of jobs) {
-        if (j?.status === "running" && typeof j.startedAt === "number" && (start == null || j.startedAt < start)) start = j.startedAt;
-      }
-      if (start != null) return Math.max(0, now - start);
-      try {
-        const face = sessionBridge?.sessions?.binding?.(sid)?.session?.getSnapshot?.();
-        const timings = face?.turnTimings;
-        if (timings instanceof Map) {
-          for (const t2 of Array.from(timings.values()).reverse()) {
-            if (t2 && typeof t2.startTime === "number" && t2.endTime == null) return Math.max(0, now - t2.startTime);
-          }
-        } else if (timings && typeof timings === "object") {
-          for (const k of Object.keys(timings).reverse()) {
-            const t2 = timings[k];
-            if (t2 && typeof t2.startTime === "number" && t2.endTime == null) return Math.max(0, now - t2.startTime);
-          }
-        }
-      } catch {
-      }
-      return null;
+      return sessionRuntimeMs(snap, sid, sessionBridge?.sessions, sessionConversationSource, now);
     };
     const ackMap = loadNotifyAck();
     const make = (id, name, icon, self2) => {
       const sid = pr.projects.bindings[id];
       const status = statusOf(sid);
-      const glow = !!sid && (status === "done" && ackMap[sid] !== "done" || status === "need" && ackMap[sid] !== "need");
+      const glow = !!sid && (status === "done" && ackMap[sid] !== "done" || status === "need" && ackMap[sid] !== pendingAckForSession(sid));
       return {
         id,
         name,
@@ -21297,6 +22182,7 @@ function WorktableSection(props) {
   };
   (0, import_react2.useEffect)(() => {
     const env = {
+      fillHostInput: (text2) => appendHostInput(sessionBridge, text2),
       getScope: () => {
         const s = sessionScopeStore.snapshot;
         return s ? { sessionId: s.sessionId, cwd: s.cwd } : null;
@@ -21439,7 +22325,7 @@ function WorktableSection(props) {
             const bound = pr.bindings[id];
             if (bound) {
               try {
-                sessionBridge?.sessions?.open?.(bound);
+                openHostSession(clientCtx, sessionBridge?.sessions, bound);
               } catch {
               }
             }
@@ -21450,7 +22336,7 @@ function WorktableSection(props) {
           if (!sid) return;
           markPluginSessionOpen(sid);
           try {
-            sessionBridge?.sessions?.open?.(sid);
+            openHostSession(clientCtx, sessionBridge?.sessions, sid);
           } catch {
           }
         }
@@ -21479,6 +22365,7 @@ function WorktableSection(props) {
       }
       return next;
     });
+    scheduleCloudPush();
   };
   const persistProjects = (patch) => {
     setProjects((prev) => {
@@ -21489,7 +22376,79 @@ function WorktableSection(props) {
       }
       return next;
     });
+    scheduleCloudPush();
   };
+  (0, import_react2.useEffect)(() => {
+    let cancelled = false;
+    cloudStateGetter = () => ({ view: viewRef.current, projects: projectsRef.current?.projects ?? null });
+    void (async () => {
+      cloudStatePath = await loadCloudStatePath();
+      if (cancelled) return;
+      if (!cloudStatePath) {
+        try {
+          if (typeof console !== "undefined" && console.info) console.info("[dsh-worktable] \u672A\u914D\u7F6E\u672C\u673A\u4E91\u72B6\u6001\u8DEF\u5F84\uFF0803_local/local.json \u7684 cloudStatePath\uFF09\uFF0C\u4E91\u540C\u6B65\u5DF2\u505C\u7528\uFF1B\u672C\u5730\u72B6\u6001\u8BFB\u5199\u4E0D\u53D7\u5F71\u54CD\u3002");
+        } catch {
+        }
+        return;
+      }
+      let cloud = null;
+      try {
+        cloud = await fetchCloudState();
+      } catch {
+        cloud = null;
+      }
+      if (cancelled) return;
+      const cloudView = cloud && cloud.view != null ? cloud.view : null;
+      const cloudProjects = cloud && cloud.projects != null ? cloud.projects : null;
+      let localProjects = null;
+      try {
+        const raw = localStorage.getItem(PROJECTS_KEY);
+        localProjects = raw ? JSON.parse(raw) : null;
+      } catch {
+        localProjects = null;
+      }
+      const localViewRaw = localStorage.getItem(PERSIST_KEY2);
+      let restored = false;
+      if (cloudProjects !== null && projectsPopulated(cloudProjects) && !projectsPopulated(localProjects)) {
+        try {
+          localStorage.setItem(PROJECTS_KEY, JSON.stringify(cloudProjects));
+        } catch {
+        }
+        restored = true;
+      }
+      if (cloudView !== null && localViewRaw === null) {
+        try {
+          localStorage.setItem(PERSIST_KEY2, JSON.stringify(cloudView));
+        } catch {
+        }
+        restored = true;
+      }
+      if (cancelled) return;
+      if (restored) {
+        setView(loadView());
+        setProjects(loadProjects());
+      }
+      cloudHydrated = true;
+      scheduleCloudPush();
+    })().finally(() => {
+      cloudHydrated = true;
+    });
+    return () => {
+      cancelled = true;
+      cloudStateGetter = null;
+    };
+  }, []);
+  const foldersKey = Object.values(projects.folders ?? {}).join("|");
+  (0, import_react2.useEffect)(() => {
+    const folders = Object.values(projects.folders ?? {}).filter((x) => typeof x === "string" && x.length > 0);
+    if (!folders.length) return;
+    void fetch("/api/worktable/roots", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ folders })
+    }).catch(() => {
+    });
+  }, [foldersKey]);
   (0, import_react2.useEffect)(() => {
     const saved = projects.views[CONSOLE_ID];
     if (!specHasConsoleTab(saved)) {
@@ -21511,7 +22470,7 @@ function WorktableSection(props) {
         const prev = projectAttachRef.sessionId;
         if (prev) {
           try {
-            sessionBridge?.sessions?.open?.(prev);
+            openHostSession(clientCtx, sessionBridge?.sessions, prev);
           } catch {
           }
         }
@@ -21530,8 +22489,16 @@ function WorktableSection(props) {
         return { ...prev, views: { ...prev.views, [spec.id]: spec } };
       });
     };
+    splitStore.onPaneContentEdited = (projectId, paneId) => {
+      widgetRegistry.revokePane(projectId, paneId);
+      for (const [id, p] of Object.entries(pendingMountRef.current)) {
+        if (p?.binding?.projectId === projectId && p.binding.paneId === paneId) delete pendingMountRef.current[id];
+      }
+      persistPendingWidgets();
+    };
     return () => {
       splitStore.onSpecMutated = null;
+      splitStore.onPaneContentEdited = null;
     };
   }, []);
   (0, import_react2.useEffect)(() => {
@@ -21670,7 +22637,7 @@ function WorktableSection(props) {
     if (splitStore.active && splitStore.spec?.id === spec.id) {
       let prev = null;
       try {
-        prev = sessionBridge?.list?.getSnapshot?.()?.current ?? null;
+        prev = currentSessionOf(sessionBridge?.list?.getSnapshot?.()) || null;
       } catch {
       }
       projectAttachRef.sessionId = prev;
@@ -21678,28 +22645,14 @@ function WorktableSection(props) {
       const bound = projectsRef.current.projects.bindings[spec.id];
       if (bound) {
         try {
-          sessionBridge?.sessions?.open?.(bound);
+          openHostSession(clientCtx, sessionBridge?.sessions, bound);
         } catch {
         }
       }
       ackProjectNotify(spec.id);
-      const pending = pendingMountRef.current[spec.id];
-      if (pending) {
-        try {
-          const entries = Array.isArray(pending.entries) ? pending.entries : pending.content ? [{ content: pending.content, row: pending.row, index: pending.index ?? 0 }] : [];
-          let allOk = entries.length > 0;
-          for (const e of entries) {
-            splitStore.lockPane(e.row, e.index ?? 0, e.content);
-            if (!paneExists(splitStore.spec, e.row, e.index ?? 0)) allOk = false;
-          }
-          if (allOk && pending.fingerprint) recordMountedWidget(spec.id, pending.fingerprint);
-        } catch {
-        }
-        delete pendingMountRef.current[spec.id];
-        try {
-          localStorage.setItem("dsh.worktable.pendingMount.v1", JSON.stringify(pendingMountRef.current));
-        } catch {
-        }
+      for (const pending of Object.values(pendingMountRef.current)) {
+        if (pending?.binding?.projectId !== spec.id) continue;
+        void applyWidgetManifest(pending.binding, null, true);
       }
     }
   }, [projects.views]);
@@ -21713,7 +22666,7 @@ function WorktableSection(props) {
     if (splitStore.active && splitStore.spec?.id === CONSOLE_ID) {
       let prev = null;
       try {
-        prev = sessionBridge?.list?.getSnapshot?.()?.current ?? null;
+        prev = currentSessionOf(sessionBridge?.list?.getSnapshot?.()) || null;
       } catch {
       }
       projectAttachRef.sessionId = prev;
@@ -21721,7 +22674,7 @@ function WorktableSection(props) {
       projectAttachRef.attached = bound ?? prev;
       if (bound) {
         try {
-          sessionBridge?.sessions?.open?.(bound);
+          openHostSession(clientCtx, sessionBridge?.sessions, bound);
         } catch {
         }
       }
@@ -21760,6 +22713,11 @@ function WorktableSection(props) {
       setConsoleErr(true);
       return;
     }
+    if (blankSessionNeedsWorkspace(b.sessions, consoleMode === "none" ? "none" : "auto")) return;
+    if (consoleMode === "existing" && !consoleWsId) {
+      setConsoleErr(true);
+      return;
+    }
     if (consoleMode === "new" && (!consoleParent.trim() || !consoleName.trim())) {
       setConsoleErr(true);
       return;
@@ -21792,7 +22750,7 @@ function WorktableSection(props) {
       let createOpts = {};
       if (workspaceId) createOpts = { workspaceId };
       else if (folder) createOpts = { cwd: folder };
-      const sessionId = await b.sessions.create(createOpts);
+      const sessionId = await createHostSession(b.sessions, b.workspaces, createOpts, consoleMode === "none" ? "none" : "auto");
       await ensureSessionPreset(sessionId);
       await ensureSessionModel(sessionId);
       markPluginSessionOpen(sessionId);
@@ -21895,6 +22853,7 @@ function WorktableSection(props) {
       setWsFolderParent(p);
       setWsFolderError(false);
     } else if (bindPick) {
+      if (projectsRef.current.projects.folders[bindPick.id] !== p) invalidateWidgetProject(bindPick.id);
       persistProjects((prev) => ({ ...prev, folders: { ...prev.folders, [bindPick.id]: p } }));
     }
     setManualPathFor(null);
@@ -21904,10 +22863,12 @@ function WorktableSection(props) {
   const changeBindFolder = () => {
     if (!bindPick || pickBusyRef.current) return;
     pickFolder("bind", (p) => {
+      if (projectsRef.current.projects.folders[bindPick.id] !== p) invalidateWidgetProject(bindPick.id);
       persistProjects((prev) => ({ ...prev, folders: { ...prev.folders, [bindPick.id]: p } }));
     });
   };
   const setProjectBinding = (id, sessionId) => {
+    if ((projectsRef.current.projects.bindings[id] ?? null) !== sessionId) invalidateWidgetProject(id);
     persistProjects((prev) => {
       const next = { ...prev.bindings };
       if (sessionId) next[id] = sessionId;
@@ -21965,115 +22926,81 @@ function WorktableSection(props) {
   (0, import_react2.useEffect)(() => {
     notifyConsole();
   }, [projects]);
-  const applyWidgetManifest = (0, import_react2.useCallback)(async (projectId, rawManifest) => {
-    const folder = projectsRef.current.projects.folders[projectId];
-    if (!folder) return;
+  const [widgetTick, setWidgetTick] = (0, import_react2.useState)(0);
+  (0, import_react2.useEffect)(() => widgetRegistry.subscribe(() => setWidgetTick((n) => n + 1)), []);
+  const applyWidgetManifest = (0, import_react2.useCallback)(async (binding, rawManifest, force = false) => {
+    let current = widgetProjectOf(binding.projectId);
+    if (!mountedRef.current || !widgetRegistry.isCurrent(binding, current.spec, current.folder)) return;
+    const readSeq = (widgetReadSeqRef.current[binding.bindingId] ?? 0) + 1;
+    widgetReadSeqRef.current[binding.bindingId] = readSeq;
     try {
       let raw = rawManifest;
       if (raw == null) {
-        const r = await fetch("/api/worktable/file?path=" + encodeURIComponent(joinPath(folder, "widget-result.json")), { cache: "no-store" });
+        const r = await fetch("/api/worktable/file?path=" + encodeURIComponent(widgetManifestPath(binding)), { cache: "no-store" });
         if (!r.ok) return;
         raw = (await r.text()).trim();
       }
-      if (!raw) return;
-      let d = null;
-      try {
-        d = JSON.parse(raw);
-      } catch {
-      }
-      if (!d) return;
-      const items = Array.isArray(d) ? d : [d];
-      const open = splitStore.active && splitStore.spec?.id === projectId;
-      const saved = open ? splitStore.spec : projectsRef.current.projects.views[projectId] ?? projectsRef.current.projects.layouts.find((l) => l.id === projectId);
-      const targets = [];
-      for (const it of items) {
-        if (!it) continue;
-        const content = buildMountContent(folder, it);
-        if (!content) continue;
-        const pane = windowLabelToPane(saved, it.window);
-        const row = pane?.row ?? "main";
-        const index = pane?.index ?? 0;
-        if (targets.some((t2) => t2.row === row && t2.index === index)) continue;
-        targets.push({ row, index, content });
-      }
-      if (!targets.length) return;
+      current = widgetProjectOf(binding.projectId);
+      if (!mountedRef.current || !raw || widgetReadSeqRef.current[binding.bindingId] !== readSeq) return;
+      const resolved = widgetRegistry.resolve(binding, raw, current.spec, current.folder);
+      if (!resolved || !force && mountedWidgetRef.current[binding.bindingId] === raw) return;
+      const content = buildMountContent(binding.folder, resolved.item);
+      if (!content) return;
+      const open = splitStore.active && splitStore.spec?.id === binding.projectId;
       if (open) {
-        let allOk = true;
-        for (const t2 of targets) {
-          splitStore.lockPane(t2.row, t2.index, t2.content);
-          if (!paneExists(splitStore.spec, t2.row, t2.index)) allOk = false;
-        }
-        if (allOk) recordMountedWidget(projectId, raw);
+        splitStore.lockPane(resolved.target.row, resolved.target.index, content);
+        recordMountedWidget(binding.bindingId, raw);
+        delete pendingMountRef.current[binding.bindingId];
+        persistPendingWidgets();
       } else {
-        pendingMountRef.current[projectId] = { entries: targets, fingerprint: raw };
-        try {
-          localStorage.setItem("dsh.worktable.pendingMount.v1", JSON.stringify(pendingMountRef.current));
-        } catch {
-        }
+        pendingMountRef.current[binding.bindingId] = { binding };
+        persistPendingWidgets();
       }
     } catch {
     }
   }, []);
-  const tryAutoMount = (0, import_react2.useCallback)(async (projectId, sid) => {
-    void sid;
-    await applyWidgetManifest(projectId, null);
-  }, [applyWidgetManifest]);
   (0, import_react2.useEffect)(() => {
     const byId = sessionsSnapshotStore.snapshot?.byId ?? {};
+    const scopePairs = new Map(widgetRegistry.entries().map((b) => [JSON.stringify([b.projectId, b.sessionId]), b]));
+    for (const key of mountConsumedRef.current) if (!scopePairs.has(key)) mountConsumedRef.current.delete(key);
     for (const [pid, sid] of Object.entries(projects.bindings)) {
       const e = byId[sid];
       if (!e) continue;
       if (e.completed === true) {
         if (doneSeenRef.current[sid] !== true) clearNotifyAck(sid);
         doneSeenRef.current[sid] = true;
-        if (!mountConsumedRef.current.has(sid)) {
-          mountConsumedRef.current.add(sid);
-          tryAutoMount(pid, sid);
-        }
       } else {
         doneSeenRef.current[sid] = false;
-        mountConsumedRef.current.delete(sid);
       }
     }
-  }, [notifyTick, projects.bindings, tryAutoMount]);
+    for (const [key, binding] of scopePairs) {
+      const e = byId[binding.sessionId];
+      if (!e) continue;
+      if (e.completed !== true) {
+        mountConsumedRef.current.delete(key);
+        continue;
+      }
+      if (mountConsumedRef.current.has(key)) continue;
+      mountConsumedRef.current.add(key);
+      for (const b of widgetRegistry.entries(binding.projectId)) {
+        if (b.sessionId === binding.sessionId) void applyWidgetManifest(b, null, true);
+      }
+    }
+  }, [notifyTick, projects.bindings, widgetTick, applyWidgetManifest]);
   (0, import_react2.useEffect)(() => {
     let cancelled = false;
-    const folders = projects.folders ?? {};
     (async () => {
-      for (const pid of Object.keys(folders)) {
+      for (const binding of widgetRegistry.entries()) {
         if (cancelled) return;
-        const folder = folders[pid];
-        if (!folder) continue;
-        try {
-          const r = await fetch("/api/worktable/file?path=" + encodeURIComponent(joinPath(folder, "widget-result.json")), { cache: "no-store" });
-          if (!r.ok) continue;
-          const raw = (await r.text()).trim();
-          if (!raw) continue;
-          if (mountedWidgetRef.current[pid] === raw) continue;
-          await applyWidgetManifest(pid, raw);
-        } catch {
-        }
+        await applyWidgetManifest(binding, null);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [projects.folders, applyWidgetManifest]);
+  }, [projects.folders, widgetTick, applyWidgetManifest]);
   const collectKids = (0, import_react2.useCallback)((sid) => {
-    const kids = /* @__PURE__ */ new Set();
-    const snap = sessionsSnapshotStore.snapshot;
-    const byId = snap?.byId ?? {};
-    for (const [cid, ce] of Object.entries(byId)) {
-      if (ce?.parentId === sid) kids.add(cid);
-    }
-    const subMap = snap?.subagentsByParent ?? {};
-    const v = subMap[sid];
-    const arr = Array.isArray(v) ? v : v?.entries ?? v?.items ?? [];
-    if (Array.isArray(arr)) arr.forEach((c) => {
-      const cid = c?.sessionId ?? c?.id;
-      if (typeof cid === "string") kids.add(cid);
-    });
-    return kids;
+    return childSessionIdsOf(sessionsSnapshotStore.snapshot, sid);
   }, []);
   const bindNotifyMap = (0, import_react2.useMemo)(() => {
     const map2 = {};
@@ -22083,29 +23010,16 @@ function WorktableSection(props) {
     for (const [pid, sid] of Object.entries(projects.bindings)) {
       const e = byId[sid];
       if (!e) continue;
-      let needNow = sessionNotifyState(e) === "need";
-      if (!needNow) {
-        for (const cid of collectKids(sid)) {
-          const ce = byId[cid];
-          if (ce && sessionNotifyState(ce) === "need") {
-            needNow = true;
-            break;
-          }
+      const pendingAck = pendingAckForSession(sid);
+      if (pendingAck !== seen[sid]) {
+        if (seen[sid] !== void 0) {
+          clearNotifyAck(sid);
+          delete ack[sid];
         }
+        seen[sid] = pendingAck;
       }
-      if (!needNow) {
-        try {
-          const face = sessionBridge?.sessions?.binding?.(sid)?.session?.getSnapshot?.();
-          if (Array.isArray(face?.pending) && face.pending.length > 0) needNow = true;
-        } catch {
-        }
-      }
-      if (needNow !== seen[sid]) {
-        if (seen[sid] !== void 0) clearNotifyAck(sid);
-        seen[sid] = needNow;
-      }
-      if (needNow) {
-        if (ack[sid] !== "need") map2[pid] = "need";
+      if (pendingAck != null) {
+        if (ack[sid] !== pendingAck) map2[pid] = "need";
         continue;
       }
       if (sessionNotifyState(e) === "done" && ack[sid] !== "done") {
@@ -22120,22 +23034,20 @@ function WorktableSection(props) {
     const sid = projectsRef.current.projects.bindings[projectId];
     if (!sid) return;
     const byId = sessionsSnapshotStore.snapshot?.byId ?? {};
-    let needNow = sessionNotifyState(byId[sid]) === "need";
+    const pendingAck = pendingAckForSession(sid);
     for (const cid of collectKids(sid)) {
       if (sessionNotifyState(byId[cid]) === "need") {
-        needNow = true;
-        saveNotifyAck(cid, "need");
+        const childAck = pendingAckForSession(cid);
+        if (childAck != null) {
+          saveNotifyAck(cid, childAck);
+          notifyStateSeenRef.current[cid] = childAck;
+        }
       }
     }
-    if (!needNow) {
-      try {
-        const face = sessionBridge?.sessions?.binding?.(sid)?.session?.getSnapshot?.();
-        if (Array.isArray(face?.pending) && face.pending.length > 0) needNow = true;
-      } catch {
-      }
-    }
-    if (needNow) saveNotifyAck(sid, "need");
-    else {
+    if (pendingAck != null) {
+      saveNotifyAck(sid, pendingAck);
+      notifyStateSeenRef.current[sid] = pendingAck;
+    } else {
       const st = sessionNotifyState(byId[sid]);
       if (st === "done") saveNotifyAck(sid, "done");
     }
@@ -22147,6 +23059,10 @@ function WorktableSection(props) {
     [registeredIds, projects.removed]
   );
   projectsRef.current = { projects, metas, aliveRegisteredIds };
+  widgetProjectOf = (id) => ({
+    folder: projectsRef.current.projects.folders[id],
+    spec: (splitStore.active && splitStore.spec?.id === id ? splitStore.spec : void 0) ?? projectsRef.current.projects.views[id] ?? projectsRef.current.projects.layouts.find((l) => l.id === id)
+  });
   projectBindingsRef.current = projects.bindings;
   const allIds = (0, import_react2.useMemo)(() => [...aliveRegisteredIds, ...layoutIds], [aliveRegisteredIds, layoutIds]);
   const effectiveOrder = (0, import_react2.useMemo)(() => {
@@ -22270,14 +23186,16 @@ function WorktableSection(props) {
       return;
     }
     try {
+      try {
+        await fetch("/api/worktable/roots", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ folders: [folderPath] }) });
+      } catch {
+      }
       const r = await fetch("/api/worktable/mkdir", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: folderPath }) });
       if (!r.ok) {
-        setWsFolderError(true);
         setPickErr((prev) => ({ ...prev, add: t("add.folderCreateFail") }));
         return;
       }
     } catch {
-      setWsFolderError(true);
       setPickErr((prev) => ({ ...prev, add: t("add.folderCreateFail") }));
       return;
     }
@@ -22293,9 +23211,11 @@ function WorktableSection(props) {
     reportUsed(layout.id);
   };
   const removeLayout = (id) => {
+    invalidateWidgetProject(id);
     persistProjects((prev) => ({ ...prev, layouts: prev.layouts.filter((l) => l.id !== id) }));
   };
   const applyLayoutChange = (id, presetId) => {
+    invalidateWidgetProject(id);
     const layout = projects.layouts.find((l) => l.id === id);
     const meta = metas[id];
     const current = layout ?? projects.views[id];
@@ -22339,6 +23259,7 @@ function WorktableSection(props) {
   };
   const removeProject = (id) => {
     if (id === CONSOLE_ID) return;
+    invalidateWidgetProject(id);
     persistProjects((prev) => {
       const next = {
         ...prev,
@@ -22397,7 +23318,7 @@ function WorktableSection(props) {
     const sync = () => {
       const box = document.querySelector(".dsh-wt_projects");
       if (!box) return;
-      const cards = Array.from(box.querySelectorAll("button:not(.dsh-wt_layout)"));
+      const cards = Array.from(box.querySelectorAll(PROJECT_CARD_SELECTOR));
       cards.forEach((el, i) => {
         const id = aliveRegisteredIds[i];
         if (id) {
@@ -22479,7 +23400,7 @@ function WorktableSection(props) {
       const bound = projectsRef.current.projects.bindings[pid];
       if (bound) {
         try {
-          sessionBridge?.sessions?.open?.(bound);
+          openHostSession(clientCtx, sessionBridge?.sessions, bound);
         } catch {
         }
       }
@@ -22570,6 +23491,66 @@ function WorktableSection(props) {
     window.addEventListener("resize", recalc);
     return () => window.removeEventListener("resize", recalc);
   }, [viewOptionsOpen, updateInfo, sectionTop]);
+  const [railNavs, setRailNavs] = (0, import_react2.useState)(() => loadRailNavs());
+  const [openSubId, setOpenSubId] = (0, import_react2.useState)(null);
+  (0, import_react2.useEffect)(() => {
+    const onMsg = (e) => {
+      const d = e.data;
+      if (!d || d.type !== "dsh-wt-nav" || !Array.isArray(d.items) || !d.items.length) return;
+      let url;
+      try {
+        for (const f of Array.from(document.querySelectorAll("iframe.dsh-wt_paneFrame"))) {
+          if (f.contentWindow === e.source) {
+            url = f.getAttribute("src") ?? void 0;
+            break;
+          }
+        }
+      } catch {
+      }
+      const views = projectsRef.current?.projects?.views ?? {};
+      let id = null;
+      if (url) for (const [pid, spec] of Object.entries(views)) {
+        if (specHasIframeUrl(spec, url)) {
+          id = pid;
+          break;
+        }
+      }
+      if (!id && splitStore.active && splitStore.spec?.id) id = splitStore.spec.id;
+      if (!id) return;
+      const entry = {
+        url: url ?? "",
+        title: typeof d.title === "string" ? d.title : void 0,
+        items: d.items.map((it) => ({ id: String(it?.id ?? ""), label: String(it?.label ?? "") })).filter((it) => it.id),
+        active: typeof d.active === "string" ? d.active : void 0,
+        ts: Date.now()
+      };
+      if (!entry.items.length) return;
+      const want = pendingRailTab[id];
+      if (want) {
+        try {
+          e.source?.postMessage({ type: "dsh-wt-set-tab", id: want }, "*");
+        } catch {
+        }
+        delete pendingRailTab[id];
+      }
+      if (pendingOpenCfg[id]) {
+        try {
+          e.source?.postMessage({ type: "dsh-wt-open-config" }, "*");
+        } catch {
+        }
+        delete pendingOpenCfg[id];
+      }
+      setRailNavs((prev) => {
+        const old = prev[id];
+        if (old && old.url === entry.url && old.active === entry.active && JSON.stringify(old.items) === JSON.stringify(entry.items)) return prev;
+        const next = { ...prev, [id]: entry };
+        saveRailNavs(next);
+        return next;
+      });
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
   const openRailProject = (id) => {
     const pr = projectsRef.current.projects;
     const layout = pr.layouts.find((l) => l.id === id);
@@ -22579,11 +23560,76 @@ function WorktableSection(props) {
       const bound = pr.bindings[id];
       if (bound) {
         try {
-          sessionBridge?.sessions?.open?.(bound);
+          openHostSession(clientCtx, sessionBridge?.sessions, bound);
         } catch {
         }
       }
     }
+  };
+  (0, import_react2.useEffect)(() => {
+    let cancelled = false;
+    const run = async () => {
+      const pr = projectsRef.current.projects;
+      for (const l of pr.layouts) {
+        const url = artifactUrlIn(l);
+        const dir = url ? siteDirOf(url) : null;
+        if (!dir) continue;
+        const cfgPath = dir.replace(/[\\/]+$/, "") + "/.dsh-worktable/rail-nav.json";
+        try {
+          const r = await fetch("/api/worktable/file?path=" + encodeURIComponent(cfgPath), { cache: "no-store" });
+          if (!r.ok) continue;
+          const d = await r.json();
+          const items = Array.isArray(d?.items) ? d.items.map((it) => ({ id: String(it?.id ?? ""), label: String(it?.label ?? "") })).filter((it) => it.id) : [];
+          if (!items.length || cancelled) continue;
+          const title = typeof d?.title === "string" && d.title ? d.title : void 0;
+          setRailNavs((prev) => {
+            const cur = prev[l.id];
+            if (cur && cur.title === (title ?? cur.title) && JSON.stringify(cur.items) === JSON.stringify(items)) return prev;
+            const next = { ...prev, [l.id]: { url: cur?.url ?? "", title: title ?? cur?.title, items, active: cur?.active, ts: cur?.ts ?? Date.now() } };
+            saveRailNavs(next);
+            return next;
+          });
+        } catch {
+        }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [projects.layouts, projects.folders]);
+  const openRailConfig = (id) => {
+    const pr = projectsRef.current.projects;
+    const base2 = pr.views[id] ?? pr.layouts.find((l) => l.id === id);
+    setRailMenu(null);
+    if (!base2) return;
+    pendingOpenCfg[id] = true;
+    openSplit(base2);
+  };
+  const openRailProjectTab = (id, tabId) => {
+    const entry = railNavs[id];
+    const pr = projectsRef.current.projects;
+    const base2 = pr.views[id] ?? pr.layouts.find((l) => l.id === id);
+    setRailMenu(null);
+    if (!base2) return;
+    const url = entry?.url || artifactUrlIn(base2) || "";
+    if (url) {
+      pendingRailTab[id] = tabId;
+      const patched = specWithTabHash(base2, url, tabId);
+      try {
+        persistProjects((prev) => ({ ...prev, views: { ...prev.views, [id]: patched } }));
+      } catch {
+      }
+      openSplit(patched);
+      let tries = 6;
+      const apply2 = () => {
+        if (applyTabHashToFrame(url, tabId)) return;
+        if (tries-- > 0) window.setTimeout(apply2, 280);
+      };
+      apply2();
+      return;
+    }
+    openSplit(base2);
   };
   if (!wide) {
     const railItems = [
@@ -22890,7 +23936,7 @@ function WorktableSection(props) {
           updateInfo.latest
         ] }),
         updateInfo.notes && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_updateNotes", children: updateInfo.notes }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_updateCmd", children: UPGRADE_CMD2 }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_updateCmd", children: UPGRADE_CMD }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wt_updateBtns", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dsh-wt_updateBtn dsh-wt_updateBtnCopy", onClick: () => void copyUpgradeAi(), children: updateCopied ? "\u2713 " + t("update.copied") : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
             ICON_SPARK,
@@ -22899,7 +23945,27 @@ function WorktableSection(props) {
           ] }) }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dsh-wt_updateBtn", onClick: skipUpdate, children: t("update.skip") })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_updateHint", children: t("update.upgradeHint") })
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_updateHint", children: t(DESKTOP_HOST ? "update.upgradeHintDesktop" : "update.upgradeHint") })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wt_cloudCard", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_manageHead", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_manageTitle", children: t("cloud.title") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_cloudState", children: cloudMeta && cloudMeta.path ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+          cloudMeta.updatedAt ? t("cloud.snapshot", { time: String(cloudMeta.updatedAt).replace("T", " ").slice(0, 16) }) : t("cloud.snapshotUnknown"),
+          " \xB7 ",
+          cloudMeta.layouts,
+          " ",
+          t("cloud.layouts")
+        ] }) : t("cloud.notConfigured") }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wt_cloudBtns", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dsh-wt_cloudBtn", disabled: cloudBusy !== "", onClick: () => void cloudRestoreNow(), children: cloudBusy === "restore" ? t("cloud.restoring") : t("cloud.restore") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dsh-wt_cloudBtn", disabled: cloudBusy !== "" || !cloudStatePath, onClick: () => void cloudPushNow(), children: cloudBusy === "push" ? t("cloud.pushing") : t("cloud.push") })
+        ] }),
+        cloudStatus && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_cloudHint", children: cloudStatus }),
+        cloudLastPushError && !cloudStatus && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wt_cloudWarn", children: [
+          t("cloud.pushFailed"),
+          cloudLastPushError
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_cloudNote", children: t("cloud.note") })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_manageHead", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_manageTitle", children: t("sort.label") }) }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wt_sortRow", children: [
@@ -23223,13 +24289,17 @@ function WorktableSection(props) {
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "existing", children: t("console.groupExisting") }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "new", children: t("console.groupNew") })
         ] }),
-        consoleMode === "existing" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("select", { className: "dsh-wt_consoleSelect", value: consoleWsId, onChange: (e) => setConsoleWsId(e.target.value), children: listWorkspaces().map((w) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: w.id, children: w.title }, w.id)) }),
+        consoleMode === "existing" && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("select", { className: "dsh-wt_consoleSelect", value: consoleWsId, onChange: (e) => setConsoleWsId(e.target.value), children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "", children: t("console.chooseGroup") }),
+          listWorkspaces().map((w) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: w.id, children: w.title }, w.id))
+        ] }),
         consoleMode === "new" && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { className: "dsh-wt_consoleInput", placeholder: t("console.newParentPh"), value: consoleParent, onChange: (e) => setConsoleParent(e.target.value) }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { className: "dsh-wt_consoleInput", placeholder: t("console.newNamePh"), value: consoleName, onChange: (e) => setConsoleName(e.target.value) })
         ] }),
-        consoleErr && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dsh-wt_consoleErr", children: t("console.bindFail") }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dsh-wt_consoleCreateBtn", disabled: consoleBusy, onClick: bindConsoleNew, children: consoleBusy ? "\u2026" : t("console.createBind") })
+        consoleNeedsWorkspace && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dsh-wt_consoleHint", children: t("console.blankNeedsGroup") }),
+        consoleErr && !consoleNeedsWorkspace && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dsh-wt_consoleErr", children: t("console.bindFail") }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dsh-wt_consoleCreateBtn", disabled: consoleBusy || consoleNeedsWorkspace || consoleMode === "existing" && !consoleWsId, onClick: bindConsoleNew, children: consoleBusy ? "\u2026" : t("console.createBind") })
       ] })
     ] }) }),
     customOpen && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_popBackdrop", style: { zIndex: 83 }, onClick: () => setCustomOpen(false) }),
@@ -23298,54 +24368,95 @@ function WorktableSection(props) {
         }
       ),
       renderProjectSlot ? renderProjectSlot("sidebar.worktable.project", ownerProps) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_empty", children: t("empty") }),
-      visibleLayouts.map((l) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
-        "button",
-        {
-          type: "button",
-          className: "dsh-wt_layout",
-          "data-on": activeSplitId === l.id ? "true" : "false",
-          style: { order: effectiveOrder.indexOf(l.id) + 1e3, position: "relative" },
-          onClick: () => {
-            openSplit(l);
-            reportUsed(l.id);
-          },
-          children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-              "span",
+      visibleLayouts.map((l) => (() => {
+        const nav = railNavs[l.id];
+        const hasNav = !!nav?.items?.length;
+        const subOpen = hasNav && openSubId === l.id;
+        return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wt_layoutWrap", style: { order: effectiveOrder.indexOf(l.id) + 1e3 }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+            "button",
+            {
+              type: "button",
+              className: "dsh-wt_layout" + (hasNav ? " dsh-wt_layoutHasNav" : ""),
+              "data-on": activeSplitId === l.id ? "true" : "false",
+              "data-sub": hasNav ? subOpen ? "true" : "false" : void 0,
+              "aria-expanded": hasNav ? String(subOpen) : void 0,
+              "aria-haspopup": hasNav ? "menu" : void 0,
+              style: { position: "relative", width: "100%" },
+              title: hasNav ? (projects.nameOverrides[l.id] ?? l.title) + " \xB7 " + t("rail.subHint") : void 0,
+              onClick: () => {
+                if (hasNav) {
+                  setOpenSubId(subOpen ? null : l.id);
+                  return;
+                }
+                openSplit(l);
+                reportUsed(l.id);
+              },
+              onDoubleClick: () => {
+                if (hasNav) {
+                  setOpenSubId(null);
+                  openRailProject(l.id);
+                }
+              },
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                  "span",
+                  {
+                    className: "dsh-wt_layoutIcon dsh-wt_iconPick",
+                    role: "button",
+                    tabIndex: 0,
+                    title: t("icons.change"),
+                    onClick: (e) => {
+                      e.stopPropagation();
+                      openIconPick("layout", l.id, e.currentTarget);
+                    },
+                    children: l.icon ?? "\u{1F9F1}"
+                  }
+                ),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_layoutText", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_layoutName", children: projects.nameOverrides[l.id] ?? l.title }) }),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                  "span",
+                  {
+                    className: "dsh-wt_bindBtn",
+                    role: "button",
+                    tabIndex: 0,
+                    "data-bound": bindNotifyMap[l.id] ?? (projects.bindings[l.id] ? "true" : "false"),
+                    "data-tip": projects.bindings[l.id] ? t("bind.tipBound", { name: boundSessionTitle(projects.bindings[l.id]) }) + (bindNotifyMap[l.id] === "busy" ? t("bind.tipBusy") : bindNotifyMap[l.id] === "done" ? t("bind.tipDone") : bindNotifyMap[l.id] === "need" ? t("bind.tipNeed") : "") : t("bind.tipUnbound"),
+                    "aria-label": projects.bindings[l.id] ? t("bind.tipBound", { name: boundSessionTitle(projects.bindings[l.id]) }) : t("bind.tipUnbound"),
+                    onClick: (e) => {
+                      e.stopPropagation();
+                      openBindPick(l.id, e.currentTarget);
+                    },
+                    children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_bindCircles", "aria-hidden": true })
+                  }
+                ),
+                hasNav ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_subChevron", "aria-hidden": true, children: "\u203A" }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_layoutArrow", "aria-hidden": true, children: "\u203A" })
+              ]
+            }
+          ),
+          subOpen && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wt_subNav", role: "menu", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_subNavHead", children: nav.title ?? t("title") }),
+            nav.items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+              "button",
               {
-                className: "dsh-wt_layoutIcon dsh-wt_iconPick",
-                role: "button",
-                tabIndex: 0,
-                title: t("icons.change"),
-                onClick: (e) => {
-                  e.stopPropagation();
-                  openIconPick("layout", l.id, e.currentTarget);
-                },
-                children: l.icon ?? "\u{1F9F1}"
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_layoutText", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_layoutName", children: projects.nameOverrides[l.id] ?? l.title }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-              "span",
-              {
-                className: "dsh-wt_bindBtn",
-                role: "button",
-                tabIndex: 0,
-                "data-bound": bindNotifyMap[l.id] ?? (projects.bindings[l.id] ? "true" : "false"),
-                "data-tip": projects.bindings[l.id] ? t("bind.tipBound", { name: boundSessionTitle(projects.bindings[l.id]) }) + (bindNotifyMap[l.id] === "busy" ? t("bind.tipBusy") : bindNotifyMap[l.id] === "done" ? t("bind.tipDone") : bindNotifyMap[l.id] === "need" ? t("bind.tipNeed") : "") : t("bind.tipUnbound"),
-                "aria-label": projects.bindings[l.id] ? t("bind.tipBound", { name: boundSessionTitle(projects.bindings[l.id]) }) : t("bind.tipUnbound"),
-                onClick: (e) => {
-                  e.stopPropagation();
-                  openBindPick(l.id, e.currentTarget);
-                },
-                children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_bindCircles", "aria-hidden": true })
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wt_layoutArrow", "aria-hidden": true, children: "\u203A" })
-          ]
-        },
-        l.id
-      ))
+                type: "button",
+                role: "menuitem",
+                className: "dsh-wt_subNavItem",
+                "data-on": nav.active === it.id ? "true" : "false",
+                onClick: () => openRailProjectTab(l.id, it.id),
+                children: it.label
+              },
+              it.id
+            )),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_subNavSep", "aria-hidden": true }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", role: "menuitem", className: "dsh-wt_subNavItem dsh-wt_subNavCfg", onClick: () => openRailConfig(l.id), children: t("rail.configure") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", role: "menuitem", className: "dsh-wt_subNavItem dsh-wt_subNavCfg", onClick: () => {
+              setOpenSubId(null);
+              openRailProject(l.id);
+            }, children: t("rail.openLayout") })
+          ] })
+        ] }, l.id);
+      })())
     ] }),
     visibleShortcuts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_shortcuts", children: visibleShortcuts.map((s) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
       "a",
@@ -23393,7 +24504,7 @@ function apply(ctx) {
   } catch {
   }
   try {
-    window.__dshOpenSession = (id) => ctx.sessions?.open?.(id);
+    window.__dshOpenSession = (id) => openHostSession(ctx, ctx.sessions, id);
     window.__dshSessions = ctx.sessions;
     window.__dshPromptIntoSession = (id, text2) => promptIntoSession(id, text2);
     window.__dshWorkspaces = ctx.workspaces;
@@ -23454,9 +24565,29 @@ function apply(ctx) {
   ctx.effect(() => disposeSubscribe, "dsh-worktable: project registry watch");
   const sessionsList = ctx.sessions?.list;
   if (sessionsList && typeof sessionsList.getSnapshot === "function") {
+    adaptSessionSnapshot = createSessionSnapshotAdapter();
     syncSessionScope(sessionsList);
     const disposeScope = sessionsList.subscribe(() => syncSessionScope(sessionsList));
     ctx.effect(() => disposeScope, "dsh-worktable: session scope watch");
+    ctx.inject(["uiSession"], (statusCtx) => {
+      const source = statusCtx.uiSession?.sessionStatus;
+      if (!source?.getSnapshot || !source?.subscribe) return;
+      sessionStatusSource = source;
+      syncSessionScope(sessionsList);
+      const disposeStatus = source.subscribe(() => syncSessionScope(sessionsList));
+      statusCtx.effect(() => () => {
+        disposeStatus();
+        if (sessionStatusSource === source) sessionStatusSource = null;
+      }, "dsh-worktable: session status watch");
+    });
+    ctx.inject(["uiConversation"], (conversationCtx) => {
+      const source = conversationCtx.uiConversation;
+      if (typeof source?.binding !== "function") return;
+      sessionConversationSource = source;
+      conversationCtx.effect(() => () => {
+        if (sessionConversationSource === source) sessionConversationSource = null;
+      }, "dsh-worktable: conversation timer source");
+    });
   }
   ctx.slots.inject("shell.overlay", () => ctx.slots.register({
     name: "shell.overlay",

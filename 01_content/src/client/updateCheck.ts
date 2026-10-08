@@ -1,7 +1,7 @@
 /** 更新检查核心（控制室公告页使用；设置面板保留自身实现，后续版本统一去重）。键与设置面板共用。 */
 declare const __WT_VERSION__: string
 export const LOCAL_VERSION = typeof __WT_VERSION__ === 'undefined' ? 'dev' : __WT_VERSION__
-const UPDATE_REPO = 'Aisland-SJL/dsh-worktable'
+const UPDATE_REPO = 'qiudl/dsh-worktable'
 
 export type UpdateStatus = 'idle' | 'checking' | 'uptodate' | 'failed'
 export type UpdateInfo = { latest: string; notes: string; url: string }
