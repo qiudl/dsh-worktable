@@ -46,7 +46,7 @@ const mod = await import(tmpFile)
 rmSync(tmpFile, { force: true })
 
 const {
-  parseLegacyMatch, textMentionsLegacy, detectLegacyLoaded,
+  parseLegacyMatch, textMentionsLegacy, textMentionsLegacyEntry, detectLegacyLoaded,
   buildCheckPayload, pickVoiceCheckFields, VOICE_CHECK_FIELDS, VOICE_CHECK_CONCLUSIONS, LEGACY_VOICE_WARNING,
   catalogCandidates, patchCandidates, firstReadable, parseVoiceConfig, normalizeDraftTake,
 } = mod
@@ -87,6 +87,33 @@ test('textMentionsLegacy: 只回布尔', () => {
   assert.equal(textMentionsLegacy('dsh-experimental-client-ui-voice-input'), false)
   assert.equal(textMentionsLegacy(null), false)
   assert.equal(textMentionsLegacy(undefined), false)
+})
+
+test('textMentionsLegacyEntry: 只认非注释条目（注释提及不算命中）', () => {
+  // 本次核心：2026-10-04 的「已摘除」注释提到包名 → 不是条目 → false
+  const removalComment = [
+    '# 2026-10-04 已摘除 @deepseek-ai/dsh-client-ui-voice（勿装回：静默遮蔽 + 静默云计费）',
+    'plugins:',
+    '  - id: other-plugin',
+  ].join('\n')
+  assert.equal(textMentionsLegacyEntry(removalComment), false)
+  assert.equal(textMentionsLegacy(removalComment), true, '对照：原始逐字包含仍为真（故需本函数区分）')
+  // 缩进 / 前导空白的注释行同样忽略；块状注释整体忽略
+  assert.equal(textMentionsLegacyEntry('   # dsh-client-ui-voice'), false)
+  assert.equal(textMentionsLegacyEntry('  # a\n\t# dsh-client-ui-voice\n# b'), false)
+
+  // 非注释条目 → true（id 行 / name 行两种写法）
+  assert.equal(textMentionsLegacyEntry('- id: dsh-client-ui-voice'), true)
+  assert.equal(textMentionsLegacyEntry("  - name: '@deepseek-ai/dsh-client-ui-voice'"), true)
+  // 注释 + 真实条目并存 → true（命中来自条目）
+  assert.equal(textMentionsLegacyEntry('# dsh-client-ui-voice\n- id: dsh-client-ui-voice'), true)
+
+  // 无提及 / 非法输入 → false；同类新插件（experimental-…-voice-input）不误报
+  assert.equal(textMentionsLegacyEntry('- id: other-plugin'), false)
+  assert.equal(textMentionsLegacyEntry('  - name: "@deepseek-ai/dsh-experimental-client-ui-voice-input"'), false)
+  assert.equal(textMentionsLegacyEntry(''), false)
+  assert.equal(textMentionsLegacyEntry('\n'), false)
+  for (const bad of [null, undefined, 42, {}, []]) assert.equal(textMentionsLegacyEntry(bad), false, String(bad))
 })
 
 /* ── 自检产物 ─────────────────────────────────────────────────────────────── */

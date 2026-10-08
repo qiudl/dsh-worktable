@@ -247,6 +247,11 @@ function parseLegacyMatch(name2) {
 function textMentionsLegacy(text) {
   return typeof text === "string" && text.includes("dsh-client-ui-voice");
 }
+function textMentionsLegacyEntry(text) {
+  if (typeof text !== "string") return false;
+  const entryText = text.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+  return textMentionsLegacy(entryText);
+}
 function detectLegacyLoaded(entries) {
   try {
     for (const entry of entries) if (parseLegacyMatch(entry?.options?.name)) return true;
@@ -358,7 +363,8 @@ function collectVoiceCheck(ctx, time) {
   }
   return buildCheckPayload({
     time,
-    patchHasLegacy: textMentionsLegacy(patchText),
+    patchHasLegacy: textMentionsLegacyEntry(patchText),
+    // 只认非注释条目（注释提及不算命中）
     catalogHasLegacy: textMentionsLegacy(catalogText),
     catalogChecked: typeof catalogText === "string",
     // 目录/文件不存在 → false（静默降级）
@@ -1089,5 +1095,6 @@ export {
   parseVoiceConfig,
   patchCandidates,
   pickVoiceCheckFields,
-  textMentionsLegacy
+  textMentionsLegacy,
+  textMentionsLegacyEntry
 };

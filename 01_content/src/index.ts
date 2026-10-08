@@ -205,6 +205,16 @@ export function textMentionsLegacy(text: unknown): boolean {
   return typeof text === 'string' && text.includes('dsh-client-ui-voice')
 }
 
+/** F3① 判定：文本里是否有该插件的**非注释条目**（只回布尔，**绝不把文本带出去**）。
+ *  PRD §3.2 F3① 的语义是「profile patch 是否含该插件**条目**」——注释里的提及不算命中
+ *  （例：`# 2026-10-04 已摘除 @deepseek-ai/dsh-client-ui-voice` 是摘除记录，不是回流信号）。
+ *  实现只做「丢弃 trim 后以 `#` 开头的行」这一层文本过滤，**不引入 YAML 解析**（避免新风险）。 */
+export function textMentionsLegacyEntry(text: unknown): boolean {
+  if (typeof text !== 'string') return false
+  const entryText = text.split('\n').filter((line) => !line.trim().startsWith('#')).join('\n')
+  return textMentionsLegacy(entryText)
+}
+
 /** 枚举 loader entries（取 `entry.options.name`）判断旧插件是否已加载；枚举异常一律视为未命中 */
 export function detectLegacyLoaded(entries: Iterable<any>): boolean {
   try {
@@ -349,7 +359,7 @@ function collectVoiceCheck(ctx: any, time: string): VoiceCheckPayload {
   } catch { loaded = false }
   return buildCheckPayload({
     time,
-    patchHasLegacy: textMentionsLegacy(patchText),
+    patchHasLegacy: textMentionsLegacyEntry(patchText),   // 只认非注释条目（注释提及不算命中）
     catalogHasLegacy: textMentionsLegacy(catalogText),
     catalogChecked: typeof catalogText === 'string',   // 目录/文件不存在 → false（静默降级）
     legacyLoaded: loaded,
