@@ -44,8 +44,13 @@ export class WidgetMountRegistry {
   private records: Record<string, Record<string, WidgetBinding>> = Object.create(null)
   private listeners = new Set<() => void>()
   constructor(private storage: Store | null, private makeId = () => newWidgetId()) {
+    this.load()
+  }
+  /** 从 storage 重建记录（构造与 reload 共用；校验规则只有这一份）。 */
+  private load() {
+    this.records = Object.create(null)
     try {
-      const data = JSON.parse(storage?.getItem(WIDGET_BINDINGS_KEY) ?? '{}')
+      const data = JSON.parse(this.storage?.getItem(WIDGET_BINDINGS_KEY) ?? '{}')
       for (const [projectId, panes] of Object.entries(data ?? {})) {
         if (!panes || typeof panes !== 'object' || Array.isArray(panes)) continue
         const valid: Record<string, WidgetBinding> = Object.create(null)
@@ -59,6 +64,11 @@ export class WidgetMountRegistry {
         if (Object.keys(valid).length) this.records[projectId] = valid
       }
     } catch { /* Invalid registry cannot authorize an old manifest. */ }
+  }
+  /** 外部写入后重新读盘（云端恢复会直接改 localStorage）→ 生效并通知订阅者，无需重建插件实例。 */
+  reload(): void {
+    this.load()
+    for (const fn of this.listeners) fn()
   }
   private persist() {
     // A send must not proceed with ownership that cannot survive reload.

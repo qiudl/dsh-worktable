@@ -1,7 +1,7 @@
 {
   "name": "dsh-worktable",
   "description": "工作台 Worktable：DeepSeek Harness 侧边栏的 agent 级项目容器（应用抽屉）",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "repository": {
     "type": "git",
     "url": "https://github.com/qiudl/dsh-worktable.git",
@@ -59,7 +59,9 @@
     "test:widget": "node ../04_test/widget-mount.test.mjs",
     "verify:remote": "node verify-remote.mjs",
     "test:cloudwrite": "node ../04_test/cloud-state-write.test.mjs",
-    "test:variantb": "node ../04_test/variant-b-subnav.test.mjs"
+    "test:variantb": "node ../04_test/variant-b-subnav.test.mjs",
+    "test:cloudmerge": "node ../04_test/cloud-state-merge.test.mjs",
+    "test:cloudwiring": "node ../04_test/cloud-wiring.test.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

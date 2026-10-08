@@ -100,6 +100,7 @@ export const css = xtermCss + '\n' + [
   '.dsh-wt_cloudBtn:disabled{opacity:.5;cursor:default}',
   '.dsh-wt_cloudHint{margin-top:6px;font-size:11px;color:#3fb950;line-height:1.5}',
   '.dsh-wt_cloudWarn{margin-top:6px;font-size:10.5px;color:#d29922;line-height:1.5;word-break:break-all}',
+  '.dsh-wt_cloudBtns + .dsh-wt_cloudBtns{margin-top:5px}',
   '.dsh-wt_cloudNote{margin-top:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary,#6e7683);line-height:1.5}',
   '.dsh-wt_projects{display:flex;flex-direction:column;gap:4px}',
   '.dsh-wt_projects[data-managing=true]{opacity:.55;pointer-events:none}',

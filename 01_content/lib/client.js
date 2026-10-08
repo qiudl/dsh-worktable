@@ -7855,6 +7855,7 @@ var css = xterm_default + "\n" + [
   ".dsh-wt_cloudBtn:disabled{opacity:.5;cursor:default}",
   ".dsh-wt_cloudHint{margin-top:6px;font-size:11px;color:#3fb950;line-height:1.5}",
   ".dsh-wt_cloudWarn{margin-top:6px;font-size:10.5px;color:#d29922;line-height:1.5;word-break:break-all}",
+  ".dsh-wt_cloudBtns + .dsh-wt_cloudBtns{margin-top:5px}",
   ".dsh-wt_cloudNote{margin-top:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary,#6e7683);line-height:1.5}",
   ".dsh-wt_projects{display:flex;flex-direction:column;gap:4px}",
   ".dsh-wt_projects[data-managing=true]{opacity:.55;pointer-events:none}",
@@ -8459,6 +8460,12 @@ var zh = {
   "cloud.notConfigured": "\u672A\u914D\u7F6E\u4E91\u7AEF\u8DEF\u5F84\uFF0803_local/local.json\uFF09",
   "cloud.failed": "\u64CD\u4F5C\u5931\u8D25\uFF0C\u8BE6\u60C5\u89C1\u63A7\u5236\u53F0",
   "cloud.pushFailed": "\u4E0A\u6B21\u81EA\u52A8\u63A8\u9001\u5931\u8D25\uFF1A",
+  "cloud.history": "\u5386\u53F2 {n} \u4EFD",
+  "cloud.rollback": "\u9000\u56DE\u4E0A\u4E00\u4EFD\u5FEB\u7167",
+  "cloud.rolling": "\u9000\u56DE\u4E2D\u2026",
+  "cloud.rolled": "\u5DF2\u9000\u56DE\u4E0A\u4E00\u4EFD\u5FEB\u7167\uFF1A{n} \u4E2A\u5E03\u5C40\u9879\u76EE",
+  "cloud.noHistory": "\u8FD8\u6CA1\u6709\u5386\u53F2\u5FEB\u7167\u53EF\u9000\u56DE",
+  "cloud.rollbackHint": "\u7528\u4E91\u7AEF\u4FDD\u7559\u7684\u4E0A\u4E00\u4EFD\u5FEB\u7167\u66FF\u6362\u672C\u5730\uFF08\u4F1A\u5148\u5907\u4EFD\u5F53\u524D\u672C\u5730\u72B6\u6001\uFF09",
   "cloud.snapshot": "\u5FEB\u7167\uFF1A{time}",
   "cloud.snapshotUnknown": "\u5FEB\u7167\uFF1A\u65F6\u95F4\u672A\u77E5",
   "cloud.layouts": "\u4E2A\u5E03\u5C40\u9879\u76EE",
@@ -8720,6 +8727,12 @@ var en = {
   "cloud.notConfigured": "Cloud path not configured (03_local/local.json)",
   "cloud.failed": "Operation failed; see console",
   "cloud.pushFailed": "Last auto push failed: ",
+  "cloud.history": "{n} snapshots kept",
+  "cloud.rollback": "Roll back one snapshot",
+  "cloud.rolling": "Rolling back\u2026",
+  "cloud.rolled": "Rolled back to previous snapshot: {n} layout projects",
+  "cloud.noHistory": "No historical snapshot yet",
+  "cloud.rollbackHint": "Replace local state with the previous cloud snapshot (current local state is backed up first)",
   "cloud.snapshot": "Snapshot: {time}",
   "cloud.snapshotUnknown": "Snapshot: time unknown",
   "cloud.layouts": "layout projects",
@@ -9127,7 +9140,7 @@ var CHANGELOG_V030 = `\u66F4\u65B0\u516C\u544A \xB7 v0.4.0
 \u30103.1 \u6587\u5B57\u4E0E\u7EC6\u8282\u6253\u78E8\u3011\u5168\u5C40\u5B57\u4F53\u4E0E\u5B57\u53F7\u7EDF\u4E00\u4F18\u5316\u3001\u4E0B\u62C9\u9762\u677F\u73BB\u7483\u5316\u4E0E\u5BF9\u9F50\u3001\u83DC\u5355\u70B9\u9009\u540E\u4FDD\u6301\u6253\u5F00\u4FBF\u4E8E\u8FDE\u7EED\u9884\u89C8\u3001\u6309\u94AE\u63CF\u8FB9\u4E0E\u60AC\u505C\u53CD\u9988\u7B49\u4EA4\u4E92\u7EC6\u8282\uFF1B\u540C\u65F6\u4FEE\u590D\u4E86\u591A\u9879\u4F53\u9A8C\u95EE\u9898\uFF08\u7167\u7247\u4E0A\u4F20\u6E05\u6670\u5EA6\u3001\u80CC\u666F\u7F51\u683C\u7EBF\u5728\u7167\u7247\u6A21\u5F0F\u4E0B\u4E0D\u751F\u6548\u3001\u6D45\u8272\u4E3B\u9898\u4E0B\u5DE5\u4F5C\u72B6\u6001\u5149\u6548\u4E0D\u53EF\u89C1\u7B49\uFF09\u3002`;
 
 // src/client/updateCheck.ts
-var LOCAL_VERSION = false ? "dev" : "0.4.7";
+var LOCAL_VERSION = false ? "dev" : "0.4.8";
 var UPDATE_REPO = "qiudl/dsh-worktable";
 var K_UPDATE_CHECK = "dsh.worktable.updateCheck.v1";
 var K_LAST_CHECK = "dsh.worktable.lastUpdateCheck.v1";
@@ -20546,8 +20559,15 @@ var WidgetMountRegistry = class {
   constructor(storage, makeId = () => newWidgetId()) {
     this.storage = storage;
     this.makeId = makeId;
+    this.load();
+  }
+  records = /* @__PURE__ */ Object.create(null);
+  listeners = /* @__PURE__ */ new Set();
+  /** 从 storage 重建记录（构造与 reload 共用；校验规则只有这一份）。 */
+  load() {
+    this.records = /* @__PURE__ */ Object.create(null);
     try {
-      const data = JSON.parse(storage?.getItem(WIDGET_BINDINGS_KEY) ?? "{}");
+      const data = JSON.parse(this.storage?.getItem(WIDGET_BINDINGS_KEY) ?? "{}");
       for (const [projectId, panes] of Object.entries(data ?? {})) {
         if (!panes || typeof panes !== "object" || Array.isArray(panes)) continue;
         const valid = /* @__PURE__ */ Object.create(null);
@@ -20561,8 +20581,11 @@ var WidgetMountRegistry = class {
     } catch {
     }
   }
-  records = /* @__PURE__ */ Object.create(null);
-  listeners = /* @__PURE__ */ new Set();
+  /** 外部写入后重新读盘（云端恢复会直接改 localStorage）→ 生效并通知订阅者，无需重建插件实例。 */
+  reload() {
+    this.load();
+    for (const fn of this.listeners) fn();
+  }
   persist() {
     this.storage?.setItem(WIDGET_BINDINGS_KEY, JSON.stringify(this.records));
     for (const fn of this.listeners) fn();
@@ -20628,6 +20651,138 @@ var WidgetMountRegistry = class {
     }
   }
 };
+
+// src/client/cloudState.ts
+var CLOUD_HISTORY_LIMIT = 10;
+var ID_LIST_FIELDS = ["layouts", "shortcuts"];
+var ID_MAP_FIELDS = ["lastUsed", "nameOverrides", "iconOverrides", "views", "bindings", "folders"];
+var ID_SET_FIELDS = ["hidden", "removed"];
+var isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+function unionById(list2, key, other, preferOther) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (arr, isPreferred) => {
+    for (const item of arr) {
+      const id = item && typeof item === "object" ? String(item.id ?? "") : "";
+      if (!id) continue;
+      if (seen.has(id)) {
+        if (!isPreferred) continue;
+        const i = out.findIndex((x) => String(x?.id ?? "") === id);
+        if (i >= 0) out[i] = item;
+        continue;
+      }
+      seen.add(id);
+      out.push(item);
+    }
+  };
+  push(preferOther ? other : list2, true);
+  push(preferOther ? list2 : other, false);
+  return out;
+}
+function unionStrings(list2, other, preferOther) {
+  const a = Array.isArray(list2) ? list2.filter((x) => typeof x === "string") : [];
+  const b = Array.isArray(other) ? other.filter((x) => typeof x === "string") : [];
+  const first = preferOther ? b : a;
+  const second = preferOther ? a : b;
+  const out = [];
+  for (const x of [...first, ...second]) if (!out.includes(x)) out.push(x);
+  return out;
+}
+function unionMap(local, remote, preferOther) {
+  const a = isObj(local) ? local : {};
+  const b = isObj(remote) ? remote : {};
+  const out = {};
+  const keys = [...Object.keys(a), ...Object.keys(b)];
+  for (const k of keys) {
+    const hasA = Object.prototype.hasOwnProperty.call(a, k);
+    const hasB = Object.prototype.hasOwnProperty.call(b, k);
+    if (hasA && hasB) out[k] = preferOther ? b[k] : a[k];
+    else if (hasA) out[k] = a[k];
+    else out[k] = b[k];
+  }
+  return out;
+}
+function mergeProjects(local, remote, preferRemote) {
+  if (!isObj(local) && !isObj(remote)) return remote ?? local ?? {};
+  const a = isObj(local) ? local : {};
+  const b = isObj(remote) ? remote : {};
+  const out = {};
+  for (const f of ID_LIST_FIELDS) out[f] = unionById(Array.isArray(a[f]) ? a[f] : [], f, Array.isArray(b[f]) ? b[f] : [], preferRemote);
+  for (const f of ID_MAP_FIELDS) out[f] = unionMap(a[f], b[f], preferRemote);
+  for (const f of ID_SET_FIELDS) out[f] = unionStrings(a[f], b[f], preferRemote);
+  const orderA = Array.isArray(a.order) ? a.order.filter((x) => typeof x === "string") : [];
+  const orderB = Array.isArray(b.order) ? b.order.filter((x) => typeof x === "string") : [];
+  const first = preferRemote ? orderB : orderA;
+  const second = preferRemote ? orderA : orderB;
+  const order = [];
+  for (const x of [...first, ...second]) if (!order.includes(x)) order.push(x);
+  out.order = order;
+  return out;
+}
+function mergeBindings(local, remote) {
+  const out = {};
+  for (const src of [isObj(local) ? local : {}, isObj(remote) ? remote : {}]) {
+    for (const [projectId, panes] of Object.entries(src)) {
+      if (!isObj(panes)) continue;
+      const bucket = out[projectId] ?? (out[projectId] = {});
+      for (const [paneId, b] of Object.entries(panes)) {
+        if (!isObj(b)) continue;
+        if (bucket[paneId] === void 0) bucket[paneId] = b;
+      }
+    }
+  }
+  return out;
+}
+function pruneHistory(list2, limit = CLOUD_HISTORY_LIMIT) {
+  const arr = Array.isArray(list2) ? list2 : [];
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of arr) {
+    if (!isObj(raw)) continue;
+    const at = typeof raw.updatedAt === "string" ? raw.updatedAt : "";
+    if (!at || seen.has(at)) continue;
+    seen.add(at);
+    out.push({ updatedAt: at, projects: raw.projects ?? null, bindings: raw.bindings ?? null });
+    if (out.length >= Math.max(1, limit)) break;
+  }
+  return out;
+}
+function snapshotOf(p) {
+  if (!isObj(p)) return null;
+  const at = typeof p.updatedAt === "string" ? p.updatedAt : "";
+  if (!at) return null;
+  if (p.projects == null && p.bindings == null) return null;
+  return { updatedAt: at, projects: p.projects ?? null, bindings: p.bindings ?? null };
+}
+function mergeCloudState(remote, incoming, now, limit = CLOUD_HISTORY_LIMIT) {
+  const fresh = {
+    view: incoming.view,
+    projects: incoming.projects ?? null,
+    bindings: incoming.bindings ?? null,
+    updatedAt: now,
+    history: []
+  };
+  if (!isObj(remote)) return fresh;
+  const remoteAt = typeof remote.updatedAt === "string" ? remote.updatedAt : "";
+  const preferRemote = !!remoteAt && remoteAt > now;
+  const prev = snapshotOf(remote);
+  const unchanged = !!prev && JSON.stringify(prev.projects ?? null) === JSON.stringify(incoming.projects ?? null) && JSON.stringify(prev.bindings ?? null) === JSON.stringify(incoming.bindings ?? null);
+  return {
+    view: preferRemote ? remote.view ?? incoming.view : incoming.view,
+    projects: mergeProjects(incoming.projects, remote.projects, preferRemote),
+    bindings: mergeBindings(incoming.bindings, remote.bindings),
+    updatedAt: now,
+    history: pruneHistory(unchanged ? remote.history ?? [] : [prev, ...remote.history ?? []], limit)
+  };
+}
+function mergeIntoLocal(remote, local) {
+  if (!isObj(remote)) return { view: local.view, projects: local.projects, bindings: mergeBindings(local.bindings, null) };
+  return {
+    view: local.view ?? remote.view,
+    projects: mergeProjects(local.projects, remote.projects, false),
+    bindings: mergeBindings(local.bindings, remote.bindings)
+  };
+}
 
 // src/client/sessionDetails.ts
 function cleanPreviewText(raw) {
@@ -20859,7 +21014,7 @@ var WAVE_BG_B64 = "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAYEBQUFBAYFBQUHBgYHCQ8KCQgIC
 
 // src/client/index.tsx
 var import_jsx_runtime2 = require("react/jsx-runtime");
-var LOCAL_VERSION2 = false ? "dev" : "0.4.7";
+var LOCAL_VERSION2 = false ? "dev" : "0.4.8";
 var UPDATE_REPO2 = "qiudl/dsh-worktable";
 var { command: UPGRADE_CMD, prompt: UPGRADE_AI2, desktop: DESKTOP_HOST } = worktableUpgrade();
 var ICON_SYNC = /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 16 16", "aria-hidden": true, children: [
@@ -20912,39 +21067,61 @@ var cloudStateGetter = null;
 var cloudPushTimer = null;
 var cloudLastPushError = "";
 var cloudHydrated = false;
-function projectsPopulated(p) {
-  if (!p || typeof p !== "object") return false;
-  const size = (v) => Array.isArray(v) ? v.length : v && typeof v === "object" ? Object.keys(v).length : 0;
-  const o = p;
-  return size(o.order) + size(o.layouts) + size(o.folders) + size(o.bindings) + size(o.shortcuts) + size(o.nameOverrides) + size(o.iconOverrides) + size(o.removed) > 0;
+function readLocalBindings() {
+  try {
+    const raw = localStorage.getItem(WIDGET_BINDINGS_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    return d && typeof d === "object" && !Array.isArray(d) ? d : null;
+  } catch {
+    return null;
+  }
 }
-function scheduleCloudPush() {
-  if (!CLOUD_SYNC_ENABLED || !cloudStatePath || !cloudStateGetter || !cloudHydrated) return;
-  if (cloudPushTimer !== null) clearTimeout(cloudPushTimer);
-  cloudPushTimer = setTimeout(() => {
-    cloudPushTimer = null;
-    try {
-      const get = cloudStateGetter;
-      const path = cloudStatePath;
-      if (!get || !path) return;
-      const content = JSON.stringify({ ...get(), updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 1);
-      void fetch("/api/worktable/write", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path, content })
-      }).then(async (r) => {
-        if (r.ok) {
-          cloudLastPushError = "";
-          return;
-        }
-        const d = await r.json().catch(() => null);
-        cloudLastPushError = d && d.error || "HTTP " + r.status;
-      }).catch((e) => {
-        cloudLastPushError = String(e && e.message || e);
-      });
-    } catch {
+function localCloudState() {
+  let view = null;
+  let projects = null;
+  try {
+    const r = localStorage.getItem(PERSIST_KEY2);
+    view = r ? JSON.parse(r) : null;
+  } catch {
+    view = null;
+  }
+  try {
+    const r = localStorage.getItem(PROJECTS_KEY);
+    projects = r ? JSON.parse(r) : null;
+  } catch {
+    projects = null;
+  }
+  return { view, projects, bindings: readLocalBindings() };
+}
+function persistMergedLocally(projects, view, bindings) {
+  let changed = false;
+  try {
+    if (projects != null) {
+      const next = JSON.stringify(projects);
+      if (localStorage.getItem(PROJECTS_KEY) !== next) {
+        localStorage.setItem(PROJECTS_KEY, next);
+        changed = true;
+      }
     }
-  }, CLOUD_PUSH_DEBOUNCE_MS);
+    if (view != null) {
+      const next = JSON.stringify(view);
+      if (localStorage.getItem(PERSIST_KEY2) !== next) {
+        localStorage.setItem(PERSIST_KEY2, next);
+        changed = true;
+      }
+    }
+    if (bindings && Object.keys(bindings).length) {
+      const merged = mergeBindings(readLocalBindings(), bindings);
+      const next = JSON.stringify(merged);
+      if (localStorage.getItem(WIDGET_BINDINGS_KEY) !== next) {
+        localStorage.setItem(WIDGET_BINDINGS_KEY, next);
+        changed = true;
+      }
+    }
+  } catch {
+  }
+  return changed;
 }
 async function fetchCloudState() {
   const path = cloudStatePath;
@@ -20959,6 +21136,82 @@ async function fetchCloudState() {
   } catch {
     return null;
   }
+}
+async function writeCloudState() {
+  const path = cloudStatePath;
+  if (!CLOUD_SYNC_ENABLED || !path) return { ok: false, error: "notConfigured" };
+  const get = cloudStateGetter;
+  const local = get ? get() : localCloudState();
+  let remote = null;
+  try {
+    remote = await fetchCloudState();
+  } catch {
+    remote = null;
+  }
+  const merged = mergeCloudState(remote, local, (/* @__PURE__ */ new Date()).toISOString(), CLOUD_HISTORY_LIMIT);
+  try {
+    const r = await fetch("/api/worktable/write", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, content: JSON.stringify(merged, null, 1) })
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => null);
+      cloudLastPushError = d && d.error || "HTTP " + r.status;
+      return { ok: false, error: cloudLastPushError };
+    }
+    const changed = persistMergedLocally(merged.projects, void 0, merged.bindings ?? null);
+    cloudLastPushError = "";
+    return { ok: true, changed };
+  } catch (e) {
+    cloudLastPushError = String(e && e.message || e);
+    return { ok: false, error: cloudLastPushError };
+  }
+}
+async function restoreCloudState(mode = "merge") {
+  const path = cloudStatePath;
+  if (!CLOUD_SYNC_ENABLED || !path) return { ok: false, code: "notConfigured", error: "notConfigured" };
+  const remote = await fetchCloudState();
+  if (!remote || remote.projects == null && remote.bindings == null) return { ok: false, code: "empty", error: "empty" };
+  const history = pruneHistory(remote.history);
+  try {
+    const cur = localStorage.getItem(PROJECTS_KEY);
+    if (cur) localStorage.setItem(PROJECTS_KEY + ".bak-" + Date.now(), cur);
+  } catch {
+  }
+  let projects;
+  let view;
+  let bindings;
+  if (mode === "rollback") {
+    if (!history.length) return { ok: false, code: "noHistory", error: "noHistory" };
+    projects = history[0].projects;
+    bindings = history[0].bindings;
+    const local = localCloudState();
+    view = local.view ?? remote.view;
+  } else {
+    const local = localCloudState();
+    const merged = mergeIntoLocal(remote, local);
+    projects = merged.projects;
+    bindings = merged.bindings;
+    view = local.view == null ? merged.view : void 0;
+  }
+  const changed = persistMergedLocally(projects, view, bindings);
+  const pr = projects;
+  return {
+    ok: true,
+    changed,
+    layouts: Array.isArray(pr?.layouts) ? pr.layouts.length : 0,
+    history: history.length,
+    at: remote.updatedAt
+  };
+}
+function scheduleCloudPush() {
+  if (!CLOUD_SYNC_ENABLED || !cloudStatePath || !cloudStateGetter || !cloudHydrated) return;
+  if (cloudPushTimer !== null) clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(() => {
+    cloudPushTimer = null;
+    void writeCloudState();
+  }, CLOUD_PUSH_DEBOUNCE_MS);
 }
 var MIN_TOP = 56;
 var SNAP_PX = 32;
@@ -21917,10 +22170,24 @@ function WorktableSection(props) {
   const [cloudBusy, setCloudBusy] = (0, import_react2.useState)("");
   const [cloudStatus, setCloudStatus] = (0, import_react2.useState)("");
   const [cloudMeta, setCloudMeta] = (0, import_react2.useState)(null);
+  const cloudRefreshUi = (changed) => {
+    if (!changed) return;
+    setView(loadView());
+    setProjects(loadProjects());
+    try {
+      widgetRegistry.reload();
+    } catch {
+    }
+  };
   const loadCloudMeta = async () => {
     const cloud = await fetchCloudState();
     const pr = cloud && cloud.projects;
-    setCloudMeta({ path: cloudStatePath, updatedAt: cloud?.updatedAt, layouts: Array.isArray(pr?.layouts) ? pr.layouts.length : 0 });
+    setCloudMeta({
+      path: cloudStatePath,
+      updatedAt: cloud?.updatedAt,
+      layouts: Array.isArray(pr?.layouts) ? pr.layouts.length : 0,
+      history: pruneHistory(cloud?.history).length
+    });
   };
   (0, import_react2.useEffect)(() => {
     if (viewOptionsOpen) void loadCloudMeta();
@@ -21929,36 +22196,31 @@ function WorktableSection(props) {
     setCloudBusy("restore");
     setCloudStatus("");
     try {
-      if (!cloudStatePath) {
-        setCloudStatus(t("cloud.notConfigured"));
+      const r = await restoreCloudState("merge");
+      if (!r.ok) {
+        setCloudStatus(r.code === "empty" ? t("cloud.empty") : t("cloud.notConfigured"));
         return;
       }
-      const cloud = await fetchCloudState();
-      if (!cloud || !cloud.projects && !cloud.view) {
-        setCloudStatus(t("cloud.empty"));
+      cloudRefreshUi(!!r.changed);
+      setCloudStatus(t("cloud.restored", { n: String(r.layouts ?? 0) }));
+      void loadCloudMeta();
+    } catch {
+      setCloudStatus(t("cloud.failed"));
+    } finally {
+      setCloudBusy("");
+    }
+  };
+  const cloudRollbackNow = async () => {
+    setCloudBusy("rollback");
+    setCloudStatus("");
+    try {
+      const r = await restoreCloudState("rollback");
+      if (!r.ok) {
+        setCloudStatus(r.code === "noHistory" ? t("cloud.noHistory") : t("cloud.empty"));
         return;
       }
-      try {
-        const cur = localStorage.getItem(PROJECTS_KEY);
-        if (cur) localStorage.setItem(PROJECTS_KEY + ".bak-" + Date.now(), cur);
-      } catch {
-      }
-      if (cloud.projects) {
-        try {
-          localStorage.setItem(PROJECTS_KEY, JSON.stringify(cloud.projects));
-        } catch {
-        }
-      }
-      if (cloud.view) {
-        try {
-          localStorage.setItem(PERSIST_KEY2, JSON.stringify(cloud.view));
-        } catch {
-        }
-      }
-      setView(loadView());
-      setProjects(loadProjects());
-      const n = Array.isArray(cloud.projects?.layouts) ? cloud.projects.layouts.length : 0;
-      setCloudStatus(t("cloud.restored", { n: String(n) }));
+      cloudRefreshUi(!!r.changed);
+      setCloudStatus(t("cloud.rolled", { n: String(r.layouts ?? 0) }));
       void loadCloudMeta();
     } catch {
       setCloudStatus(t("cloud.failed"));
@@ -21970,16 +22232,12 @@ function WorktableSection(props) {
     setCloudBusy("push");
     setCloudStatus("");
     try {
-      const path = cloudStatePath;
-      if (!path) {
-        setCloudStatus(t("cloud.notConfigured"));
-        return;
+      const r = await writeCloudState();
+      setCloudStatus(r.ok ? t("cloud.pushed") : t("cloud.failed"));
+      if (r.ok) {
+        cloudRefreshUi(!!r.changed);
+        void loadCloudMeta();
       }
-      const content = JSON.stringify({ view: viewRef.current, projects: projectsRef.current.projects, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 1);
-      const r = await fetch("/api/worktable/write", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, content }) });
-      const d = await r.json().catch(() => null);
-      setCloudStatus(d && d.ok ? t("cloud.pushed") : t("cloud.failed"));
-      if (d && d.ok) void loadCloudMeta();
     } catch {
       setCloudStatus(t("cloud.failed"));
     } finally {
@@ -22398,35 +22656,20 @@ function WorktableSection(props) {
         cloud = null;
       }
       if (cancelled) return;
-      const cloudView = cloud && cloud.view != null ? cloud.view : null;
-      const cloudProjects = cloud && cloud.projects != null ? cloud.projects : null;
-      let localProjects = null;
-      try {
-        const raw = localStorage.getItem(PROJECTS_KEY);
-        localProjects = raw ? JSON.parse(raw) : null;
-      } catch {
-        localProjects = null;
-      }
-      const localViewRaw = localStorage.getItem(PERSIST_KEY2);
-      let restored = false;
-      if (cloudProjects !== null && projectsPopulated(cloudProjects) && !projectsPopulated(localProjects)) {
-        try {
-          localStorage.setItem(PROJECTS_KEY, JSON.stringify(cloudProjects));
-        } catch {
-        }
-        restored = true;
-      }
-      if (cloudView !== null && localViewRaw === null) {
-        try {
-          localStorage.setItem(PERSIST_KEY2, JSON.stringify(cloudView));
-        } catch {
-        }
-        restored = true;
+      let changed = false;
+      if (cloud) {
+        const local = localCloudState();
+        const merged = mergeIntoLocal(cloud, local);
+        changed = persistMergedLocally(merged.projects, local.view == null ? merged.view : void 0, merged.bindings);
       }
       if (cancelled) return;
-      if (restored) {
+      if (changed) {
         setView(loadView());
         setProjects(loadProjects());
+        try {
+          widgetRegistry.reload();
+        } catch {
+        }
       }
       cloudHydrated = true;
       scheduleCloudPush();
@@ -23952,12 +24195,24 @@ function WorktableSection(props) {
           " \xB7 ",
           cloudMeta.layouts,
           " ",
-          t("cloud.layouts")
+          t("cloud.layouts"),
+          cloudMeta.history > 0 ? " \xB7 " + t("cloud.history", { n: String(cloudMeta.history) }) : ""
         ] }) : t("cloud.notConfigured") }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wt_cloudBtns", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dsh-wt_cloudBtn", disabled: cloudBusy !== "", onClick: () => void cloudRestoreNow(), children: cloudBusy === "restore" ? t("cloud.restoring") : t("cloud.restore") }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dsh-wt_cloudBtn", disabled: cloudBusy !== "" || !cloudStatePath, onClick: () => void cloudPushNow(), children: cloudBusy === "push" ? t("cloud.pushing") : t("cloud.push") })
         ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_cloudBtns", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+          "button",
+          {
+            type: "button",
+            className: "dsh-wt_cloudBtn",
+            disabled: cloudBusy !== "" || !cloudStatePath || !(cloudMeta && cloudMeta.history > 0),
+            title: t("cloud.rollbackHint"),
+            onClick: () => void cloudRollbackNow(),
+            children: cloudBusy === "rollback" ? t("cloud.rolling") : t("cloud.rollback")
+          }
+        ) }),
         cloudStatus && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wt_cloudHint", children: cloudStatus }),
         cloudLastPushError && !cloudStatus && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wt_cloudWarn", children: [
           t("cloud.pushFailed"),

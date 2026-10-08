@@ -5,7 +5,8 @@ import { isAbs, joinPath, parentPathOf, basenameOf } from './pathutil'
 import { splitStore, SplitWorkspace, setSplitT, setSplitEnv, type LayoutSpec, type SplitPane, type ConsoleCardData } from './split'
 import { appendHostInput } from './hostInput'
 import { worktableUpgrade } from './hostTransport'
-import { WidgetMountRegistry, newWidgetId, widgetManifestPath, type WidgetBinding } from './widgetMount'
+import { WidgetMountRegistry, newWidgetId, widgetManifestPath, WIDGET_BINDINGS_KEY, type WidgetBinding } from './widgetMount'
+import { mergeCloudState, mergeIntoLocal, mergeBindings, pruneHistory, CLOUD_HISTORY_LIMIT, type CloudPayload } from './cloudState'
 import { currentSessionOf, openHostSession, sendHostSession, createSessionSnapshotAdapter, childSessionIdsOf, pendingAckOf, sessionRuntimeMs } from './sessionCompat'
 import { cleanPreviewText, previewFromEvents, readSessionPreview, presetApiOf, modelApiOf, createHostSession, blankSessionNeedsWorkspace } from './sessionDetails'
 import { photoStore, kindOf } from './photoStore'
@@ -170,7 +171,7 @@ async function loadCloudStatePath(): Promise<string | null> {
 
 /** 组件挂载后注册：取出当前完整状态。viewRef/projectsRef 每次渲染都重新赋值，
  *  所以防抖到点时读到的就是最新状态（不会把半旧快照写上去）。 */
-let cloudStateGetter: null | (() => { view: unknown; projects: unknown }) = null
+let cloudStateGetter: null | (() => { view: unknown; projects: unknown; bindings: Record<string, unknown> | null }) = null
 let cloudPushTimer: ReturnType<typeof setTimeout> | null = null
 /** 最近一次自动推送的失败原因（空 = 无失败）。设置面板据此显示，避免“静默失效”。 */
 let cloudLastPushError = ''
@@ -192,34 +193,49 @@ function projectsPopulated(p: unknown): boolean {
     + size(o.shortcuts) + size(o.nameOverrides) + size(o.iconOverrides) + size(o.removed) > 0
 }
 
-/** 防抖推送完整状态到云端文件。始终写全量（view + projects），
- *  否则只写变化的那一半会把文件里另一半抹掉。失败静默：不影响本地使用。 */
-function scheduleCloudPush(): void {
-  if (!CLOUD_SYNC_ENABLED || !cloudStatePath || !cloudStateGetter || !cloudHydrated) return
-  if (cloudPushTimer !== null) clearTimeout(cloudPushTimer)
-  cloudPushTimer = setTimeout(() => {
-    cloudPushTimer = null
-    try {
-      const get = cloudStateGetter
-      const path = cloudStatePath
-      if (!get || !path) return
-      const content = JSON.stringify({ ...get(), updatedAt: new Date().toISOString() }, null, 1)
-      void fetch('/api/worktable/write', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path, content }),
-      }).then(async (r) => {
-        // 不阻断本地使用，但把失败记下来（403/500 一类以前是完全静默的）
-        if (r.ok) { cloudLastPushError = ''; return }
-        const d: any = await r.json().catch(() => null)
-        cloudLastPushError = (d && d.error) || ('HTTP ' + r.status)
-      }).catch((e) => { cloudLastPushError = String((e && e.message) || e) })
-    } catch { /* 同上 */ }
-  }, CLOUD_PUSH_DEBOUNCE_MS)
+/** 本机的「窗口自动挂载绑定」（per-origin 的 localStorage 键内容）；不是对象则 null。 */
+function readLocalBindings(): Record<string, unknown> | null {
+  try {
+    const raw = localStorage.getItem(WIDGET_BINDINGS_KEY)
+    if (!raw) return null
+    const d = JSON.parse(raw)
+    return d && typeof d === 'object' && !Array.isArray(d) ? d as Record<string, unknown> : null
+  } catch { return null }
 }
 
-/** 读云端状态文件；未配置路径 / 不存在 / 取不到 / 不可解析一律返回 null（绝不阻断启动）。 */
-async function fetchCloudState(): Promise<{ view?: unknown; projects?: unknown } | null> {
+/** 读本地三键（原始值，不做 load* 校正）→ 供合并使用。 */
+function localCloudState(): { view: unknown; projects: unknown; bindings: Record<string, unknown> | null } {
+  let view: unknown = null
+  let projects: unknown = null
+  try { const r = localStorage.getItem(PERSIST_KEY); view = r ? JSON.parse(r) : null } catch { view = null }
+  try { const r = localStorage.getItem(PROJECTS_KEY); projects = r ? JSON.parse(r) : null } catch { projects = null }
+  return { view, projects, bindings: readLocalBindings() }
+}
+
+/** 把合并结果写回本地；返回是否发生变化。
+ *  绑定与本地再并集一次（本地优先）→ 云端恢复绝不会删掉本机已 revoke/新增的窗口绑定。 */
+function persistMergedLocally(projects: unknown, view: unknown, bindings: Record<string, unknown> | null | undefined): boolean {
+  let changed = false
+  try {
+    if (projects != null) {
+      const next = JSON.stringify(projects)
+      if (localStorage.getItem(PROJECTS_KEY) !== next) { localStorage.setItem(PROJECTS_KEY, next); changed = true }
+    }
+    if (view != null) {
+      const next = JSON.stringify(view)
+      if (localStorage.getItem(PERSIST_KEY) !== next) { localStorage.setItem(PERSIST_KEY, next); changed = true }
+    }
+    if (bindings && Object.keys(bindings).length) {
+      const merged = mergeBindings(readLocalBindings(), bindings)
+      const next = JSON.stringify(merged)
+      if (localStorage.getItem(WIDGET_BINDINGS_KEY) !== next) { localStorage.setItem(WIDGET_BINDINGS_KEY, next); changed = true }
+    }
+  } catch { /* 配额/隐私模式：失败不影响使用 */ }
+  return changed
+}
+
+/** 读云端 payload（含 bindings 与 history）；未配置/取不到/坏 JSON → null（绝不阻断启动）。 */
+async function fetchCloudState(): Promise<CloudPayload | null> {
   const path = cloudStatePath
   if (!CLOUD_SYNC_ENABLED || !path) return null
   try {
@@ -228,9 +244,90 @@ async function fetchCloudState(): Promise<{ view?: unknown; projects?: unknown }
     const raw = (await r.text()).trim()
     if (!raw) return null
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? (parsed as { view?: unknown; projects?: unknown }) : null
+    return parsed && typeof parsed === 'object' ? (parsed as CloudPayload) : null
   } catch { return null }
 }
+
+/** 读-合并-写：推送前先读云端，按 id 并集合并后再写（不再整份覆盖）。
+ *  history 保留最近 CLOUD_HISTORY_LIMIT 份，供「退回上一份快照」。 */
+async function writeCloudState(): Promise<{ ok: boolean; error?: string; changed?: boolean }> {
+  const path = cloudStatePath
+  if (!CLOUD_SYNC_ENABLED || !path) return { ok: false, error: 'notConfigured' }
+  const get = cloudStateGetter
+  const local = get ? get() : localCloudState()
+  let remote: CloudPayload | null = null
+  try { remote = await fetchCloudState() } catch { remote = null }
+  const merged = mergeCloudState(remote, local as any, new Date().toISOString(), CLOUD_HISTORY_LIMIT)
+  try {
+    const r = await fetch('/api/worktable/write', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path, content: JSON.stringify(merged, null, 1) }),
+    })
+    if (!r.ok) {
+      const d: any = await r.json().catch(() => null)
+      cloudLastPushError = (d && d.error) || ('HTTP ' + r.status)
+      return { ok: false, error: cloudLastPushError }
+    }
+    // 合并结果也写回本地：云端可能带来本机没有的条目/窗口绑定
+    const changed = persistMergedLocally(merged.projects, undefined, merged.bindings ?? null)
+    cloudLastPushError = ''
+    return { ok: true, changed }
+  } catch (e: any) {
+    cloudLastPushError = String((e && e.message) || e)
+    return { ok: false, error: cloudLastPushError }
+  }
+}
+
+/** 从云端恢复：`merge`（默认，并集，绝不丢本地）或 `rollback`（用最近一份历史快照替换，先备份本地）。 */
+async function restoreCloudState(mode: 'merge' | 'rollback' = 'merge'):
+  Promise<{ ok: boolean; code?: string; error?: string; changed?: boolean; layouts?: number; history?: number; at?: string }> {
+  const path = cloudStatePath
+  if (!CLOUD_SYNC_ENABLED || !path) return { ok: false, code: 'notConfigured', error: 'notConfigured' }
+  const remote = await fetchCloudState()
+  if (!remote || (remote.projects == null && remote.bindings == null)) return { ok: false, code: 'empty', error: 'empty' }
+  const history = pruneHistory(remote.history)
+  // 备份当前本地（时间戳键）——误点也能找回
+  try {
+    const cur = localStorage.getItem(PROJECTS_KEY)
+    if (cur) localStorage.setItem(PROJECTS_KEY + '.bak-' + Date.now(), cur)
+  } catch { /* 备份失败不阻断恢复 */ }
+  let projects: unknown
+  let view: unknown
+  let bindings: Record<string, unknown> | null | undefined
+  if (mode === 'rollback') {
+    if (!history.length) return { ok: false, code: 'noHistory', error: 'noHistory' }
+    projects = history[0].projects
+    bindings = history[0].bindings
+    const local = localCloudState()
+    view = local.view ?? remote.view
+  } else {
+    const local = localCloudState()
+    const merged = mergeIntoLocal(remote, local as any)
+    projects = merged.projects
+    bindings = merged.bindings
+    view = local.view == null ? merged.view : undefined     // 本地已有 UI 偏好则不动
+  }
+  const changed = persistMergedLocally(projects, view, bindings)
+  const pr: any = projects
+  return {
+    ok: true, changed,
+    layouts: Array.isArray(pr?.layouts) ? pr.layouts.length : 0,
+    history: history.length,
+    at: remote.updatedAt,
+  }
+}
+
+/** 防抖推送完整状态到云端（读-合并-写）。失败静默：不影响本地使用，但失败原因记在 cloudLastPushError。 */
+function scheduleCloudPush(): void {
+  if (!CLOUD_SYNC_ENABLED || !cloudStatePath || !cloudStateGetter || !cloudHydrated) return
+  if (cloudPushTimer !== null) clearTimeout(cloudPushTimer)
+  cloudPushTimer = setTimeout(() => {
+    cloudPushTimer = null
+    void writeCloudState()
+  }, CLOUD_PUSH_DEBOUNCE_MS)
+}
+
 const MIN_TOP = 56
 const SNAP_PX = 32
 /** 插件市场外链（GitHub 仓库，已核实可访问；PRD 提及的 dshfind.com 未验证，不用死链）。 */
@@ -1238,42 +1335,50 @@ function WorktableSection(props: any) {
    *  路径由服务端 /api/worktable/local-paths 从 03_local/local.json 解析（含 DSH_HOME 兜底）。 */
   const [cloudBusy, setCloudBusy] = useState<'' | 'restore' | 'push'>('')
   const [cloudStatus, setCloudStatus] = useState('')
-  const [cloudMeta, setCloudMeta] = useState<{ path: string | null; updatedAt?: string; layouts: number } | null>(null)
+  const [cloudMeta, setCloudMeta] = useState<{ path: string | null; updatedAt?: string; layouts: number; history: number } | null>(null)
+  /** 合并/恢复后把本地状态同步进 React（并让窗口绑定注册器重读 localStorage）。 */
+  const cloudRefreshUi = (changed: boolean) => {
+    if (!changed) return
+    setView(loadView()); setProjects(loadProjects())
+    try { widgetRegistry.reload() } catch { /* 注册器不可用不影响其余状态 */ }
+  }
   const loadCloudMeta = async () => {
     const cloud: any = await fetchCloudState()
     const pr: any = cloud && cloud.projects
-    setCloudMeta({ path: cloudStatePath, updatedAt: cloud?.updatedAt, layouts: Array.isArray(pr?.layouts) ? pr.layouts.length : 0 })
+    setCloudMeta({
+      path: cloudStatePath,
+      updatedAt: cloud?.updatedAt,
+      layouts: Array.isArray(pr?.layouts) ? pr.layouts.length : 0,
+      history: pruneHistory(cloud?.history).length,
+    })
   }
   useEffect(() => { if (viewOptionsOpen) void loadCloudMeta() }, [viewOptionsOpen])
   const cloudRestoreNow = async () => {
     setCloudBusy('restore'); setCloudStatus('')
     try {
-      if (!cloudStatePath) { setCloudStatus(t('cloud.notConfigured')); return }
-      const cloud: any = await fetchCloudState()
-      if (!cloud || (!cloud.projects && !cloud.view)) { setCloudStatus(t('cloud.empty')); return }
-      // 先用时间戳键备份当前本地状态，误点也能找回（不覆盖任何云端内容）
-      try {
-        const cur = localStorage.getItem(PROJECTS_KEY)
-        if (cur) localStorage.setItem(PROJECTS_KEY + '.bak-' + Date.now(), cur)
-      } catch { /* 备份失败不阻断恢复 */ }
-      if (cloud.projects) { try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(cloud.projects)) } catch {} }
-      if (cloud.view) { try { localStorage.setItem(PERSIST_KEY, JSON.stringify(cloud.view)) } catch {} }
-      setView(loadView()); setProjects(loadProjects())
-      const n = Array.isArray((cloud.projects as any)?.layouts) ? (cloud.projects as any).layouts.length : 0
-      setCloudStatus(t('cloud.restored', { n: String(n) }))
+      const r = await restoreCloudState('merge')
+      if (!r.ok) { setCloudStatus(r.code === 'empty' ? t('cloud.empty') : t('cloud.notConfigured')); return }
+      cloudRefreshUi(!!r.changed)
+      setCloudStatus(t('cloud.restored', { n: String(r.layouts ?? 0) }))
+      void loadCloudMeta()
+    } catch { setCloudStatus(t('cloud.failed')) } finally { setCloudBusy('') }
+  }
+  const cloudRollbackNow = async () => {
+    setCloudBusy('rollback'); setCloudStatus('')
+    try {
+      const r = await restoreCloudState('rollback')
+      if (!r.ok) { setCloudStatus(r.code === 'noHistory' ? t('cloud.noHistory') : t('cloud.empty')); return }
+      cloudRefreshUi(!!r.changed)
+      setCloudStatus(t('cloud.rolled', { n: String(r.layouts ?? 0) }))
       void loadCloudMeta()
     } catch { setCloudStatus(t('cloud.failed')) } finally { setCloudBusy('') }
   }
   const cloudPushNow = async () => {
     setCloudBusy('push'); setCloudStatus('')
     try {
-      const path = cloudStatePath
-      if (!path) { setCloudStatus(t('cloud.notConfigured')); return }
-      const content = JSON.stringify({ view: viewRef.current, projects: projectsRef.current.projects, updatedAt: new Date().toISOString() }, null, 1)
-      const r = await fetch('/api/worktable/write', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path, content }) })
-      const d: any = await r.json().catch(() => null)
-      setCloudStatus(d && d.ok ? t('cloud.pushed') : t('cloud.failed'))
-      if (d && d.ok) void loadCloudMeta()
+      const r = await writeCloudState()
+      setCloudStatus(r.ok ? t('cloud.pushed') : t('cloud.failed'))
+      if (r.ok) { cloudRefreshUi(!!r.changed); void loadCloudMeta() }
     } catch { setCloudStatus(t('cloud.failed')) } finally { setCloudBusy('') }
   }
   // 更新检查：徽标 / 更新卡 / 版本行共用；节流一天一次，忽略按版本号存 localStorage
@@ -1648,38 +1753,27 @@ function WorktableSection(props: any) {
         try { if (typeof console !== 'undefined' && console.info) console.info('[dsh-worktable] 未配置本机云状态路径（03_local/local.json 的 cloudStatePath），云同步已停用；本地状态读写不受影响。') } catch {}
         return
       }
-      let cloud: { view?: unknown; projects?: unknown } | null = null
+      // 启动恢复：不再要求"本地为空"——始终与云端做并集合并（本地有内容也不丢云端，
+      // 云端有内容也不删本地），这同时修掉了旧规则下"本地有一点东西就跳过恢复"的缺口。
+      let cloud: CloudPayload | null = null
       try { cloud = await fetchCloudState() } catch { cloud = null }
       if (cancelled) return
-      const cloudView = cloud && cloud.view != null ? cloud.view : null
-      const cloudProjects = cloud && cloud.projects != null ? cloud.projects : null
-
-      // 本地现有内容：此刻 localStorage 可能已被挂载期的自愈写入，所以看内容而不是看键
-      let localProjects: unknown = null
-      try {
-        const raw = localStorage.getItem(PROJECTS_KEY)
-        localProjects = raw ? JSON.parse(raw) : null
-      } catch { localProjects = null }
-      const localViewRaw = localStorage.getItem(PERSIST_KEY)
-
-      let restored = false
-      // projects：云端有料、本地没料 → 用云端恢复（换 origin / 清缓存后的主路径）
-      if (cloudProjects !== null && projectsPopulated(cloudProjects) && !projectsPopulated(localProjects)) {
-        try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(cloudProjects)) } catch {}
-        restored = true
-      }
-      // view：本地没有这一项才用云端（本地有就不动，避免覆盖用户当前设置）
-      if (cloudView !== null && localViewRaw === null) {
-        try { localStorage.setItem(PERSIST_KEY, JSON.stringify(cloudView)) } catch {}
-        restored = true
+      let changed = false
+      if (cloud) {
+        const local = localCloudState()
+        const merged = mergeIntoLocal(cloud, local as any)
+        // view 只在本地没有时写（避免把本机 UI 偏好顶掉）；绑定与本地并集，绝不删本机记录
+        changed = persistMergedLocally(merged.projects, local.view == null ? merged.view : undefined, merged.bindings)
       }
       if (cancelled) return
-      if (restored) {
+      if (changed) {
         // 交给既有的 load* 做一次同款校正，避免把未校验的数据直接塞进 state
         setView(loadView())
         setProjects(loadProjects())
+        // 绑定可能刚从云端补回来（本 origin 的 localStorage 原本没有）→ 让注册器重读
+        try { widgetRegistry.reload() } catch { /* 注册器不可用不影响其余状态 */ }
       }
-      // 判定结束 → 开闸，并把当前（可能刚恢复出来的）状态推上去
+      // 判定结束 → 开闸，并把当前（合并后的）状态推上去（云端也就补齐了本机独有的内容）
       cloudHydrated = true
       scheduleCloudPush()
     })().finally(() => { cloudHydrated = true })
@@ -3168,6 +3262,7 @@ function buildCustomLayoutPrompt(req: string): string {
                       ? t('cloud.snapshot', { time: String(cloudMeta.updatedAt).replace('T', ' ').slice(0, 16) })
                       : t('cloud.snapshotUnknown')}
                     {' · '}{cloudMeta.layouts} {t('cloud.layouts')}
+                    {cloudMeta.history > 0 ? ' · ' + t('cloud.history', { n: String(cloudMeta.history) }) : ''}
                   </>
                 : t('cloud.notConfigured')}
             </div>
@@ -3177,6 +3272,17 @@ function buildCustomLayoutPrompt(req: string): string {
               </button>
               <button type="button" className="dsh-wt_cloudBtn" disabled={cloudBusy !== '' || !cloudStatePath} onClick={() => void cloudPushNow()}>
                 {cloudBusy === 'push' ? t('cloud.pushing') : t('cloud.push')}
+              </button>
+            </div>
+            <div className="dsh-wt_cloudBtns">
+              <button
+                type="button"
+                className="dsh-wt_cloudBtn"
+                disabled={cloudBusy !== '' || !cloudStatePath || !(cloudMeta && cloudMeta.history > 0)}
+                title={t('cloud.rollbackHint')}
+                onClick={() => void cloudRollbackNow()}
+              >
+                {cloudBusy === 'rollback' ? t('cloud.rolling') : t('cloud.rollback')}
               </button>
             </div>
             {cloudStatus && <div className="dsh-wt_cloudHint">{cloudStatus}</div>}
