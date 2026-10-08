@@ -1009,6 +1009,46 @@ export function apply(ctx: Context) {
     },
   })
 
+  // === M0 临时探针（REQ-20261008-0010；M0 判定后回滚）===
+  // 桌面云桥只在 Slark 渲染进程里、且无 devtools 入口 → 无法直接取 errorCode。
+  // 改用间接判定：① 计数桩 /api/voice/asr（duet 若命中 ⇒ 桥回落了）；② 宿主进程内探 speechToText 可取性。
+  // 只写文件产物，便于无 cookie 复核。**不落音频、不记正文。**
+  register({
+    kind: 'exact',
+    path: '/api/voice/asr',
+    handler: async (req: any, res: any) => {
+      try {
+        const f = pathResolve(resolveDshHomeSafe(), 'logs', 'm0-voice-probe.json')
+        let d: any = {}
+        try { d = JSON.parse(await readFile(f, 'utf8')) } catch { d = {} }
+        d.hits = (Number(d.hits) || 0) + 1
+        d.firstAt = d.firstAt || new Date().toISOString()
+        d.lastAt = new Date().toISOString()
+        d.lastContentType = String(req?.headers?.['content-type'] || '')
+        d.lastVoiceMode = String(req?.headers?.['x-voice-mode'] || '')
+        const fsxProbe = await import('node:fs/promises')
+        await fsxProbe.writeFile(f, JSON.stringify(d, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+        json(res, 200, { text: '' })
+      } catch (err) { json(res, 500, { error: String(err) }) }
+    },
+  })
+  void (async () => {
+    try {
+      const svc: any = ctx.get('speechToText')
+      const out = {
+        time: new Date().toISOString(),
+        speechToTextAvailable: !!svc,
+        speechToTextType: typeof svc,
+        hasTranscribe: typeof svc?.transcribe === 'function',
+        hasResolve: typeof svc?.resolve === 'function',
+        probeVersion: 'm0-1',
+      }
+      const fsxProbe = await import('node:fs/promises')
+      await fsxProbe.writeFile(pathResolve(resolveDshHomeSafe(), 'logs', 'm0-probe.json'),
+        JSON.stringify(out, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+    } catch { /* 探针失败静默：不影响插件加载 */ }
+  })()
+
   // 工作区列表（自定义窗口会话分组用）：
   // 优先走宿主正式服务 ctx.workspaceRegistry（0.1.1/0.1.2 均有，正确感知 DSH_HOME 与存储后端）；
   // 不可用时回退按 resolveDshHomeSafe() 读 storages/workspace.json（只读）。

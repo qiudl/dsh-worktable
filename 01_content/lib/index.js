@@ -1015,6 +1015,51 @@ function apply(ctx) {
   });
   register({
     kind: "exact",
+    path: "/api/voice/asr",
+    handler: async (req, res) => {
+      try {
+        const f = pathResolve(resolveDshHomeSafe(), "logs", "m0-voice-probe.json");
+        let d = {};
+        try {
+          d = JSON.parse(await readFile(f, "utf8"));
+        } catch {
+          d = {};
+        }
+        d.hits = (Number(d.hits) || 0) + 1;
+        d.firstAt = d.firstAt || (/* @__PURE__ */ new Date()).toISOString();
+        d.lastAt = (/* @__PURE__ */ new Date()).toISOString();
+        d.lastContentType = String(req?.headers?.["content-type"] || "");
+        d.lastVoiceMode = String(req?.headers?.["x-voice-mode"] || "");
+        const fsxProbe = await import("node:fs/promises");
+        await fsxProbe.writeFile(f, JSON.stringify(d, null, 2) + "\n", { encoding: "utf8", mode: 384 });
+        json(res, 200, { text: "" });
+      } catch (err) {
+        json(res, 500, { error: String(err) });
+      }
+    }
+  });
+  void (async () => {
+    try {
+      const svc = ctx.get("speechToText");
+      const out = {
+        time: (/* @__PURE__ */ new Date()).toISOString(),
+        speechToTextAvailable: !!svc,
+        speechToTextType: typeof svc,
+        hasTranscribe: typeof svc?.transcribe === "function",
+        hasResolve: typeof svc?.resolve === "function",
+        probeVersion: "m0-1"
+      };
+      const fsxProbe = await import("node:fs/promises");
+      await fsxProbe.writeFile(
+        pathResolve(resolveDshHomeSafe(), "logs", "m0-probe.json"),
+        JSON.stringify(out, null, 2) + "\n",
+        { encoding: "utf8", mode: 384 }
+      );
+    } catch {
+    }
+  })();
+  register({
+    kind: "exact",
     path: "/api/worktable/workspaces",
     handler: async (_req, res) => {
       try {
