@@ -2896,7 +2896,6 @@ function buildCustomLayoutPrompt(req: string): string {
   const openRailConfig = (id: string) => {
     const pr = projectsRef.current.projects
     const base = (pr.views[id] ?? pr.layouts.find((l) => l.id === id)) as LayoutSpec | undefined
-    setRailMenu(null)
     if (!base) return
     pendingOpenCfg[id] = true
     openSplit(base)
@@ -2907,7 +2906,6 @@ function buildCustomLayoutPrompt(req: string): string {
     const entry = railNavs[id]
     const pr = projectsRef.current.projects
     const base = (pr.views[id] ?? pr.layouts.find((l) => l.id === id)) as LayoutSpec | undefined
-    setRailMenu(null)
     if (!base) return
     const url = entry?.url || artifactUrlIn(base) || ''
     if (url) {
