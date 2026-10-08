@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict'
 import { test, after } from 'node:test'
 import { createRequire } from 'node:module'
-import { readFileSync, writeFileSync, rmSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { readFileSync, writeFileSync, rmSync, existsSync, mkdirSync, mkdtempSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -46,9 +46,10 @@ const mod = await import(tmpFile)
 rmSync(tmpFile, { force: true })
 
 const {
-  parseLegacyMatch, textMentionsLegacy, textMentionsLegacyEntry, detectLegacyLoaded,
+  parseLegacyMatch, textMentionsLegacy, textMentionsLegacyEntry, stripYamlLineComment, detectLegacyLoaded,
   buildCheckPayload, pickVoiceCheckFields, VOICE_CHECK_FIELDS, VOICE_CHECK_CONCLUSIONS, LEGACY_VOICE_WARNING,
-  catalogCandidates, patchCandidates, firstReadable, parseVoiceConfig, normalizeDraftTake,
+  catalogCandidates, patchCandidates, firstReadable, parseVoiceConfig, VOICE_CONFIG_ERRORS,
+  voiceConfigInvalidWarning, normalizeDraftTake, withFileLock, writeFileAtomic,
 } = mod
 
 /* ── 匹配规则 ─────────────────────────────────────────────────────────────── */
@@ -114,6 +115,38 @@ test('textMentionsLegacyEntry: 只认非注释条目（注释提及不算命中�
   assert.equal(textMentionsLegacyEntry(''), false)
   assert.equal(textMentionsLegacyEntry('\n'), false)
   for (const bad of [null, undefined, 42, {}, []]) assert.equal(textMentionsLegacyEntry(bad), false, String(bad))
+})
+
+test('textMentionsLegacyEntry: 行内（尾随）注释也排除（CR-23118 ①）', () => {
+  // CR 实测的假阳性：entry 位置为空数组，包名只出现在行内注释里
+  assert.equal(textMentionsLegacyEntry('plugins: [] # note: @deepseek-ai/dsh-client-ui-voice'), false)
+  assert.equal(textMentionsLegacyEntry('  plugins: [] # note: @deepseek-ai/dsh-client-ui-voice'), false)
+  assert.equal(textMentionsLegacyEntry('a: 1\t# x @deepseek-ai/dsh-client-ui-voice'), false)
+  // CRLF：`\r\n` 行尾残留的 `\r` 不得影响截断
+  assert.equal(textMentionsLegacyEntry('plugins: [] # note: @deepseek-ai/dsh-client-ui-voice\r\nplugins: []\r\n'), false)
+  // 多行混合：只有注释里出现 → false；真实条目在别行 → true
+  assert.equal(textMentionsLegacyEntry('# dsh-client-ui-voice\nplugins: [] # dsh-client-ui-voice\n'), false)
+  assert.equal(textMentionsLegacyEntry('plugins: [] # dsh-client-ui-voice\n- id: dsh-client-ui-voice'), true)
+  // `#` 前无空白 ⇒ YAML plain scalar 的一部分，不是注释（不得截断）
+  assert.equal(textMentionsLegacyEntry('- id: dsh-client-ui-voice#suffix'), true)
+  // 引号内的 `#` 不是注释（引号识别生效）：值里的包名仍算命中
+  assert.equal(textMentionsLegacyEntry('- note: "a # b @deepseek-ai/dsh-client-ui-voice"'), true)
+  assert.equal(textMentionsLegacyEntry("- name: '@deepseek-ai/dsh-client-ui-voice' # 注释里的提及"), true)
+  // 引号 + 行内注释：注释部分被截断，引号内的值保留
+  assert.equal(textMentionsLegacyEntry('- name: "@deepseek-ai/dsh-experimental-client-ui-voice-input" # dsh-client-ui-voice'), false,
+    '注释里的包名不得命中，引号里的官方新插件名也不得命中')
+})
+
+test('stripYamlLineComment: 只截「行首/前置空白后的 #」，引号内的 # 保留', () => {
+  assert.equal(stripYamlLineComment('- id: dsh-client-ui-voice'), '- id: dsh-client-ui-voice')
+  assert.equal(stripYamlLineComment('# whole line'), '')
+  assert.equal(stripYamlLineComment('   # indented'), '   ')
+  assert.equal(stripYamlLineComment('k: v # c'), 'k: v ')
+  assert.equal(stripYamlLineComment('k: a#b'), 'k: a#b')
+  assert.equal(stripYamlLineComment('k: "a # b" # c'), 'k: "a # b" ')
+  assert.equal(stripYamlLineComment("k: 'a # b'"), "k: 'a # b'")
+  assert.equal(stripYamlLineComment("k: 'it''s # x' # y"), "k: 'it''s # x' ")
+  assert.equal(stripYamlLineComment('k: "esc \\" # still" # y'), 'k: "esc \\" # still" ')
 })
 
 /* ── 自检产物 ─────────────────────────────────────────────────────────────── */
@@ -201,14 +234,27 @@ test('firstReadable: 目录/文件不存在 → null（catalogChecked:false 的�
 
 /* ── F5 开关 / F1 埋点归一 ────────────────────────────────────────────────── */
 
-test('parseVoiceConfig: 缺文件/坏 JSON/非布尔 → 默认 true', () => {
+test('parseVoiceConfig: 合法布尔原样；坏 JSON / 非对象 / 非布尔 → 默认 true + invalid 短枚举（CR-23118 ③）', () => {
   assert.deepEqual(parseVoiceConfig(undefined), { voiceAsrEnabled: true })
   assert.deepEqual(parseVoiceConfig(null), { voiceAsrEnabled: true })
-  assert.deepEqual(parseVoiceConfig('not json'), { voiceAsrEnabled: true })
   assert.deepEqual(parseVoiceConfig('{"voiceAsrEnabled":true}'), { voiceAsrEnabled: true })
   assert.deepEqual(parseVoiceConfig('{"voiceAsrEnabled":false}'), { voiceAsrEnabled: false })
-  assert.deepEqual(parseVoiceConfig('{"voiceAsrEnabled":"no"}'), { voiceAsrEnabled: true })
-  assert.deepEqual(parseVoiceConfig('{"other":1}'), { voiceAsrEnabled: true })
+  // 非法：值用默认 true，且必须带 invalid + 短枚举（不静默）
+  assert.deepEqual(parseVoiceConfig('not json'), { voiceAsrEnabled: true, invalid: true, error: 'bad-json' })
+  assert.deepEqual(parseVoiceConfig('{not json'), { voiceAsrEnabled: true, invalid: true, error: 'bad-json' })
+  assert.deepEqual(parseVoiceConfig('{"voiceAsrEnabled":"false"}'), { voiceAsrEnabled: true, invalid: true, error: 'not-boolean' })
+  assert.deepEqual(parseVoiceConfig('{"voiceAsrEnabled":"no"}'), { voiceAsrEnabled: true, invalid: true, error: 'not-boolean' })
+  assert.deepEqual(parseVoiceConfig('{"voiceAsrEnabled":0}'), { voiceAsrEnabled: true, invalid: true, error: 'not-boolean' })
+  assert.deepEqual(parseVoiceConfig('{"other":1}'), { voiceAsrEnabled: true, invalid: true, error: 'not-boolean' })
+  assert.deepEqual(parseVoiceConfig('[1,2]'), { voiceAsrEnabled: true, invalid: true, error: 'not-object' })
+  // 非法时只回短枚举，不回原文
+  assert.equal(JSON.stringify(parseVoiceConfig('{"voiceAsrEnabled":"SECRET-TEXT"}')).includes('SECRET-TEXT'), false)
+  assert.equal(VOICE_CONFIG_ERRORS.includes('bad-json') && VOICE_CONFIG_ERRORS.includes('not-boolean'), true)
+  // 宿主告警文案：含短枚举，不含文件内容/绝对路径
+  const warn = voiceConfigInvalidWarning('bad-json')
+  assert.ok(warn.includes('bad-json') && warn.includes('配置无效'), warn)
+  assert.ok(warn.includes('$DSH_HOME/worktable-voice.json'), '用固定文件名指路')
+  assert.equal(/\/Users\/|\/private\/|\/tmp\//.test(warn), false, '告警不得含绝对路径：' + warn)
 })
 
 test('normalizeDraftTake: 非数字/负值 → 0，单次上限 1000', () => {
@@ -311,17 +357,48 @@ test('apply()：旧插件已加载 → 告警含三点（静默遮蔽/静默计�
   assert.ok(w.includes('静默遮蔽') && w.includes('静默计费') && w.includes('勿装回'), '告警三点必须齐全：' + w)
 })
 
-test('apply()：F5 开关从 $DSH_HOME/worktable-voice.json 读，缺文件默认 true', async () => {
-  const routes = new Map()
-  mod.apply(makeCtx(routes, [], [OFFICIAL_ENTRY]))
-  let body = JSON.parse((await callRoute(routes, '/api/worktable/voice-config')).text)
-  assert.deepEqual(body, { voiceAsrEnabled: true, exists: false })
+test('apply()：voice-config 四态 —— 缺文件 / 坏 JSON / 非布尔 / 合法 false（CR-23118 ③）', async () => {
+  const CFG = join(TMP_HOME, 'worktable-voice.json')
+  const boot = async () => {
+    const routes = new Map(); const warns = []
+    mod.apply(makeCtx(routes, warns, [OFFICIAL_ENTRY]))
+    const body = JSON.parse((await callRoute(routes, '/api/worktable/voice-config')).text)
+    return { body, warns }
+  }
 
-  writeFileSync(join(TMP_HOME, 'worktable-voice.json'), JSON.stringify({ voiceAsrEnabled: false }))
-  const routes2 = new Map()
-  mod.apply(makeCtx(routes2, [], [OFFICIAL_ENTRY]))
-  body = JSON.parse((await callRoute(routes2, '/api/worktable/voice-config')).text)
-  assert.deepEqual(body, { voiceAsrEnabled: false, exists: true })
+  // ① 缺文件 → exists:false + source:default，**不出现** invalid/error，也不告警
+  rmSync(CFG, { force: true })
+  let r = await boot()
+  assert.deepEqual(r.body, { voiceAsrEnabled: true, exists: false, source: 'default' })
+  assert.equal('invalid' in r.body, false)
+  assert.equal('error' in r.body, false)
+  assert.equal(r.warns.some((w) => w.includes('配置无效')), false)
+
+  // ② 坏 JSON → invalid:true + 默认 true + error:'bad-json' + 宿主告警（不含文件内容）
+  writeFileSync(CFG, '{not json at all')
+  r = await boot()
+  assert.deepEqual(r.body, { voiceAsrEnabled: true, exists: true, source: 'default', invalid: true, error: 'bad-json' })
+  assert.ok(r.warns.some((w) => w.includes('配置无效') && w.includes('bad-json')), '坏 JSON 必须写宿主告警：' + JSON.stringify(r.warns))
+  assert.equal(r.warns.join('\n').includes('not json at all'), false, '告警不得含文件内容')
+
+  // ③ 字符串 "false"（非布尔）→ invalid:true + 值仍是默认 true（**不得**显示成已停用/已启用）
+  writeFileSync(CFG, JSON.stringify({ voiceAsrEnabled: 'false' }))
+  r = await boot()
+  assert.deepEqual(r.body, { voiceAsrEnabled: true, exists: true, source: 'default', invalid: true, error: 'not-boolean' })
+  assert.ok(r.warns.some((w) => w.includes('配置无效')), '非布尔必须写宿主告警')
+
+  // ④ 合法布尔 false → 不出现 invalid，值如实为 false，无告警
+  writeFileSync(CFG, JSON.stringify({ voiceAsrEnabled: false }))
+  r = await boot()
+  assert.deepEqual(r.body, { voiceAsrEnabled: false, exists: true, source: 'file' })
+  assert.equal('invalid' in r.body, false)
+  assert.equal(r.warns.some((w) => w.includes('配置无效')), false)
+
+  // ⑤ 合法布尔 true → source:file
+  writeFileSync(CFG, JSON.stringify({ voiceAsrEnabled: true }))
+  r = await boot()
+  assert.deepEqual(r.body, { voiceAsrEnabled: true, exists: true, source: 'file' })
+  rmSync(CFG, { force: true })
 })
 
 test('draftTake 埋点：POST 累加 stats.draftTakes，GET 读回；与 corrected/learn 并列', async () => {
@@ -356,6 +433,68 @@ test('draftTake 埋点：POST 累加 stats.draftTakes，GET 读回；与 correct
   const bad = await callRoute(routes, UM, { method: 'POST', url: UM + '?name=speech.json', body: { draftTake: 'abc' } })
   assert.equal(bad.status, 400)
   assert.equal((await get()).content.stats.draftTakes, 3, '非法埋点不得改动计数')
+})
+
+/* ── CR-23118 ②：并发不丢更新（串行化 + 原子替换）───────────────────────────── */
+
+test('withFileLock: 同一路径串行（读改写不丢更新），单次失败不阻塞后续', async () => {
+  const key = 'lock-' + Date.now()
+  let n = 0
+  await Promise.all(Array.from({ length: 10 }, () => withFileLock(key, async () => {
+    const cur = n
+    await sleep(1)
+    n = cur + 1
+  })))
+  assert.equal(n, 10, '同一路径必须串行：并发 10 次读改写不得丢更新')
+  await assert.rejects(withFileLock(key, async () => { throw new Error('boom') }), /boom/)
+  assert.equal(await withFileLock(key, async () => 'ok'), 'ok', '前一个任务失败后队列仍可用')
+})
+
+test('writeFileAtomic: 临时文件 + rename 替换（0600），不残留 .tmp', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wt-atomic-'))
+  const target = join(dir, 'x.json')
+  writeFileSync(target, 'old')
+  await writeFileAtomic(target, 'new', 0o600)
+  assert.equal(readFileSync(target, 'utf8'), 'new')
+  assert.deepEqual(readdirSync(dir), ['x.json'], '不得残留临时文件（rename 后目录里只有目标文件）')
+  if (process.platform !== 'win32') assert.equal(statSync(target).mode & 0o777, 0o600, '保留 0600 语义')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('draftTake 并发：10 个并发 POST → stats.draftTakes 恰好 += 10（无丢失更新）', async () => {
+  const routes = new Map()
+  mod.apply(makeCtx(routes, [], [OFFICIAL_ENTRY]))
+  const UM = '/api/worktable/user-memory'
+  const get = () => callRoute(routes, UM, { url: UM + '?name=speech.json' }).then((r) => JSON.parse(r.text))
+  const post = () => callRoute(routes, UM, { method: 'POST', url: UM + '?name=speech.json', body: { draftTake: 1 } })
+
+  const before = Number((await get()).content.stats.draftTakes) || 0
+  const res = await Promise.all(Array.from({ length: 10 }, post))
+  for (const r of res) assert.equal(r.status, 200, '并发 POST 全部应 200：' + r.text)
+  const after = await get()
+  assert.equal(Number(after.content.stats.draftTakes) - before, 10,
+    '并发 10 次必须恰好 +10（少记 = 串行化失效的丢失更新）；before=' + before + ' after=' + after.content.stats.draftTakes)
+})
+
+test('corrected/learn/draftTake 并发不互相覆盖（同一串行队列）', async () => {
+  const routes = new Map()
+  mod.apply(makeCtx(routes, [], [OFFICIAL_ENTRY]))
+  const UM = '/api/worktable/user-memory'
+  const post = (b) => callRoute(routes, UM, { method: 'POST', url: UM + '?name=speech.json', body: b })
+  const get = () => callRoute(routes, UM, { url: UM + '?name=speech.json' }).then((r) => JSON.parse(r.text))
+
+  const base = await get()
+  const n0 = Number(base.content.stats.draftTakes) || 0
+  const c0 = Number(base.content.stats.corrected['彦梅']) || 0
+  await Promise.all([
+    ...Array.from({ length: 5 }, () => post({ draftTake: 1 })),
+    ...Array.from({ length: 5 }, () => post({ corrected: { 彦梅: 1 } })),
+    post({ learn: { wrong: '彦梅梅', right: '彦梅' } }),
+  ])
+  const after = await get()
+  assert.equal(Number(after.content.stats.draftTakes) - n0, 5, 'draftTake 5 次全部记上')
+  assert.equal(Number(after.content.stats.corrected['彦梅']) - c0, 5, 'corrected 5 次全部记上（未被 draftTake 覆盖）')
+  assert.ok(after.content.terms.includes('彦梅'), 'learn 与并发计数并存')
 })
 
 // 自检的「第二趟」（apply 里 1.5s 后补跑）会在这之后写盘，故先等它跑完再清临时 DSH_HOME

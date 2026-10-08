@@ -92,6 +92,7 @@ test('提示条插在口述页最前面（renderDictate 顶部）', () => {
 test('埋点：POST /api/worktable/user-memory body {"draftTake":1}（fire-and-forget）', async () => {
   const calls = []
   const { reportDraftTake } = loadFns(['reportDraftTake'], {
+    lastDraftTakeAt: 0, DRAFT_TAKE_DEBOUNCE_MS: 500,
     fetch: (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }) },
   })
   assert.equal(reportDraftTake(), undefined, '必须是 fire-and-forget（不返回 Promise 给调用方 await）')
@@ -103,10 +104,36 @@ test('埋点：POST /api/worktable/user-memory body {"draftTake":1}（fire-and-f
 })
 
 test('埋点：fetch 抛错 / 失败都不得影响取草稿主流程', () => {
-  const { reportDraftTake } = loadFns(['reportDraftTake'], { fetch: () => { throw new Error('network down') } })
+  const { reportDraftTake } = loadFns(['reportDraftTake'], {
+    lastDraftTakeAt: 0, DRAFT_TAKE_DEBOUNCE_MS: 500,
+    fetch: () => { throw new Error('network down') },
+  })
   assert.doesNotThrow(() => reportDraftTake(), '埋点抛错必须被吞掉')
   const body = extractFn(src, 'reportDraftTake')
   assert.ok(/\.then\(function \(\) \{\}, function \(\) \{\}\)/.test(body), 'Promise 失败分支必须静默处理')
+})
+
+test('埋点防抖（CR-23118 ②）：同一时间窗内连续多次调用只发一次 fetch', () => {
+  const calls = []
+  const clock = { t: 1000000 }   // 受控时钟（按引用共享 → 可直接推进）
+  const sandbox = {
+    lastDraftTakeAt: 0, DRAFT_TAKE_DEBOUNCE_MS: 500, Date: { now: () => clock.t },
+    fetch: (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }) },
+  }
+  const { reportDraftTake } = loadFns(['reportDraftTake'], sandbox)
+  reportDraftTake()
+  assert.equal(calls.length, 1, '第一次必须上报')
+  reportDraftTake(); reportDraftTake()
+  assert.equal(calls.length, 1, '同一时间窗内连点不得再发（防抖生效）')
+  clock.t += 499
+  reportDraftTake()
+  assert.equal(calls.length, 1, '窗口内（<500ms）仍不重发')
+  clock.t += 2
+  reportDraftTake()
+  assert.equal(calls.length, 2, '窗口过后应可再次上报')
+  assert.deepEqual(calls.map((c) => JSON.parse(c.opts.body)), [{ draftTake: 1 }, { draftTake: 1 }], '每次上报都是 {"draftTake":1}')
+  // 防抖状态是模块级的（源码里声明），不是每次调用清零
+  assert.ok(/var lastDraftTakeAt = 0/.test(src), '页面需有模块级 lastDraftTakeAt（跨调用保持）')
 })
 
 test('埋点在「取输入框草稿」的入口、先于读草稿主流程', () => {
@@ -136,12 +163,20 @@ test('F3 自检行：正常态 / 命中态 / 无产物态三分支', () => {
   assert.ok(dead.includes('读不到自检路由'))
 })
 
-test('F5 开关行：开 / 关 / 文件缺失 / 路由不可用', () => {
+test('F5 开关行：开 / 关 / 文件缺失 / 配置无效 / 路由不可用（CR-23118 ③ 四态）', () => {
   const mk = (voiceCfg) => loadFns(['voiceSwitchLine'], { voiceCfg }).voiceSwitchLine
-  assert.ok(mk({ voiceAsrEnabled: true, exists: true })().includes('true（已启用）'))
-  assert.ok(mk({ voiceAsrEnabled: false, exists: true })().includes('false（已停用）'))
-  assert.ok(mk({ voiceAsrEnabled: true, exists: false })().includes('默认值 true'))
+  assert.ok(mk({ voiceAsrEnabled: true, exists: true, source: 'file' })().includes('true（已启用）'))
+  assert.ok(mk({ voiceAsrEnabled: false, exists: true, source: 'file' })().includes('false（已停用）'))
+  assert.ok(mk({ voiceAsrEnabled: true, exists: false, source: 'default' })().includes('默认值 true'))
   assert.ok(mk(null)().includes('读不到'))
+  // 非法值绝不显示成「已启用」：显式告警 + 枚举
+  const invalid = mk({ voiceAsrEnabled: true, exists: true, source: 'default', invalid: true, error: 'not-boolean' })()
+  assert.ok(invalid.includes('⚠️ 配置无效，已按默认启用'), '非法配置必须显式提示：' + invalid)
+  assert.ok(invalid.includes('not-boolean'), '要带上短枚举便于排查：' + invalid)
+  assert.equal(invalid.includes('true（已启用）'), false, '非法值不得显示成「已启用」')
+  const badJson = mk({ voiceAsrEnabled: true, exists: true, source: 'default', invalid: true, error: 'bad-json' })()
+  assert.ok(badJson.includes('配置无效') && badJson.includes('bad-json'))
+  assert.equal(badJson.includes('true（已启用）'), false)
 })
 
 /* ── 旧提示不冲突 ─────────────────────────────────────────────────────────── */

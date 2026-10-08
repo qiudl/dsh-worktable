@@ -1,8 +1,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import { execFile } from 'node:child_process'
-import { readdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, resolve as pathResolve, sep } from 'node:path'
+import { basename, dirname, resolve as pathResolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -205,13 +205,39 @@ export function textMentionsLegacy(text: unknown): boolean {
   return typeof text === 'string' && text.includes('dsh-client-ui-voice')
 }
 
+/** 按 YAML 行内注释规则截断一行：从「行首或前置空白之后的第一个 `#`」起丢弃该行剩余部分。
+ *  - `#` 前必须有空白（或位于行首）才算注释，故 `foo#bar` 不被截断（YAML plain scalar）；
+ *  - `'…'` / `"…"` 引号字符串内的 `#` **不算**注释（YAML quoted scalar）；按 YAML 处理
+ *    `''`（单引号内转义单引号）与 `\"`（双引号内转义双引号）。
+ *  只回文本、不做任何 IO；这是纯文本近似，非完整 YAML 解析。 */
+export function stripYamlLineComment(line: string): string {
+  let quote = ''
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (quote) {
+      if (quote === '"' && c === '\\') { i++; continue }
+      if (c === quote) {
+        if (quote === "'" && line[i + 1] === "'") { i++; continue }   // YAML: '' 表示一个单引号
+        quote = ''
+      }
+      continue
+    }
+    if (c === "'" || c === '"') { quote = c; continue }
+    if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i)
+  }
+  return line
+}
+
 /** F3① 判定：文本里是否有该插件的**非注释条目**（只回布尔，**绝不把文本带出去**）。
  *  PRD §3.2 F3① 的语义是「profile patch 是否含该插件**条目**」——注释里的提及不算命中
  *  （例：`# 2026-10-04 已摘除 @deepseek-ai/dsh-client-ui-voice` 是摘除记录，不是回流信号）。
- *  实现只做「丢弃 trim 后以 `#` 开头的行」这一层文本过滤，**不引入 YAML 解析**（避免新风险）。 */
+ *  实现按 YAML 行内注释规则**逐行截断**后匹配（行首注释与行内尾随注释都丢弃），
+ *  **不引入 YAML 解析**（避免新风险）；引号字符串内的提及仍算命中（与 PRD「条目」口径的
+ *  已知偏差：把 `note: "@deepseek-ai/dsh-client-ui-voice"` 这类任意字符串值当条目，
+ *  要区分它需要完整 YAML 解析，本 REQ 不做）。 */
 export function textMentionsLegacyEntry(text: unknown): boolean {
   if (typeof text !== 'string') return false
-  const entryText = text.split('\n').filter((line) => !line.trim().startsWith('#')).join('\n')
+  const entryText = text.split('\n').map(stripYamlLineComment).join('\n')
   return textMentionsLegacy(entryText)
 }
 
@@ -301,23 +327,84 @@ export function firstReadable(candidates: string[], read: (p: string) => string)
   return null
 }
 
-/** F5 开关解析：`$DSH_HOME/worktable-voice.json` 的 `{"voiceAsrEnabled": bool}`；不存在/坏 JSON/非布尔 → 默认 true */
-export function parseVoiceConfig(raw: unknown): { voiceAsrEnabled: boolean } {
-  try {
-    const doc = typeof raw === 'string' ? JSON.parse(raw) : null
-    if (doc && typeof doc === 'object' && typeof (doc as any).voiceAsrEnabled === 'boolean') {
-      return { voiceAsrEnabled: (doc as any).voiceAsrEnabled }
-    }
-  } catch { /* 坏 JSON → 默认 */ }
-  return { voiceAsrEnabled: true }
+/** F5 开关的 error 短枚举（**不含路径/内容**：日志与页面只回这个枚举） */
+export const VOICE_CONFIG_ERRORS = ['bad-json', 'not-object', 'not-boolean', 'read-failed'] as const
+export type VoiceConfigError = typeof VOICE_CONFIG_ERRORS[number]
+
+/** F5 开关状态（CR-23118 ③：非法值不再静默）。
+ *  - 缺文件 → `{voiceAsrEnabled:true, exists:false, source:'default'}`（默认行为保留，**不标 invalid**）；
+ *  - 文件存在但坏 JSON / 非对象 / 值非布尔 → `invalid:true` + `voiceAsrEnabled` 用默认 `true` + `error` 短枚举；
+ *  - 值合法布尔 → 原值，**不出现 invalid**（`false` 也如实回 `false`）。
+ *  `source` 表示**生效值**的来源：读到合法布尔为 `'file'`，其余（缺文件/非法回落）为 `'default'`。 */
+export type VoiceConfigStatus = {
+  voiceAsrEnabled: boolean
+  exists: boolean
+  source: 'file' | 'default'
+  invalid?: true
+  error?: VoiceConfigError
 }
 
-/** 读 F5 开关文件：`$DSH_HOME/worktable-voice.json`（不存在/读不到 → 默认 true + exists:false） */
-function loadVoiceConfig(): { voiceAsrEnabled: boolean; exists: boolean } {
+/** F5 开关解析：`{"voiceAsrEnabled": bool}` → 原值；坏 JSON / 非对象 / 非布尔 → 默认 true + invalid 标记。
+ *  入参非字符串（未读到内容）视为「没有配置」→ 默认 true，**不标 invalid**（与缺文件同口径）。 */
+export function parseVoiceConfig(raw: unknown): { voiceAsrEnabled: boolean; invalid?: true; error?: VoiceConfigError } {
+  if (typeof raw !== 'string') return { voiceAsrEnabled: true }
+  let doc: any
+  try { doc = JSON.parse(raw) } catch { return { voiceAsrEnabled: true, invalid: true, error: 'bad-json' } }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { voiceAsrEnabled: true, invalid: true, error: 'not-object' }
+  if (typeof doc.voiceAsrEnabled !== 'boolean') return { voiceAsrEnabled: true, invalid: true, error: 'not-boolean' }
+  return { voiceAsrEnabled: doc.voiceAsrEnabled }
+}
+
+/** 读 F5 开关文件：`$DSH_HOME/worktable-voice.json`。
+ *  缺文件/读失败 → 默认 true + `exists:false`（读失败另外标 `invalid:true` + `error:'read-failed'`）；
+ *  读到了就交给 `parseVoiceConfig` 区分「合法 / 非法」——非法时标 invalid，值仍用默认 true。 */
+function loadVoiceConfig(): VoiceConfigStatus {
+  const file = pathResolve(resolveDshHomeSafe(), 'worktable-voice.json')
+  let raw: string
   try {
-    const file = pathResolve(resolveDshHomeSafe(), 'worktable-voice.json')
-    return { ...parseVoiceConfig(readFileSync(file, 'utf8')), exists: true }
-  } catch { return { voiceAsrEnabled: true, exists: false } }
+    raw = readFileSync(file, 'utf8')
+  } catch {
+    if (existsSync(file)) {
+      return { voiceAsrEnabled: true, exists: true, source: 'default', invalid: true, error: 'read-failed' }
+    }
+    return { voiceAsrEnabled: true, exists: false, source: 'default' }
+  }
+  const parsed = parseVoiceConfig(raw)
+  if (parsed.invalid) return { voiceAsrEnabled: parsed.voiceAsrEnabled, exists: true, source: 'default', invalid: true, error: parsed.error }
+  return { voiceAsrEnabled: parsed.voiceAsrEnabled, exists: true, source: 'file' }
+}
+
+/** 配置非法时的宿主告警（CR-23118 ③）：只含**短枚举**与固定文件名，
+ *  **不含文件内容、不含绝对路径**（不得把配置原文带进日志）。 */
+export function voiceConfigInvalidWarning(error: string): string {
+  return '[dsh-worktable] ⚠️ 语音开关配置无效（$DSH_HOME/worktable-voice.json：' + error +
+    '）→ voiceAsrEnabled 已按默认 true 生效；请修正该文件（或删掉它走默认）'
+}
+
+/** 进程内按文件路径串行化：同一路径的「读—改—写」排队执行（CR-23118 ②：防并发丢更新）。
+ *  - 前一个任务失败也继续跑下一个（队列不因单次失败卡死）；
+ *  - 调用方拿到自己那次任务的真实结果/异常；队列尾只存吞掉异常的空链，避免 unhandled rejection。 */
+const fileQueues = new Map<string, Promise<unknown>>()
+export function withFileLock<T>(file: string, task: () => Promise<T>): Promise<T> {
+  const prev = fileQueues.get(file) ?? Promise.resolve()
+  const run = prev.then(task, task)
+  fileQueues.set(file, run.then(() => undefined, () => undefined))
+  return run
+}
+
+/** 原子落盘：同目录临时文件 + `rename` 替换（POSIX rename 原子，读者见到的是完整新旧版本之一）。
+ *  临时文件是新建的 → `mode`（0600）生效，rename 后目标文件即该权限（保留既有语义）；
+ *  rename 失败先清理临时文件再重抛（错误交给调用方既有的 catch）。 */
+export async function writeFileAtomic(file: string, data: string, mode: number): Promise<void> {
+  const fsx = await import('node:fs/promises')
+  const tmp = pathResolve(dirname(file), '.' + basename(file) + '.' + process.pid + '.' + Date.now().toString(36) + '.' + Math.random().toString(36).slice(2, 8) + '.tmp')
+  await fsx.writeFile(tmp, data, { encoding: 'utf8', mode })
+  try {
+    await fsx.rename(tmp, file)
+  } catch (err) {
+    try { await fsx.unlink(tmp) } catch { /* 清理失败忽略 */ }
+    throw err
+  }
 }
 
 /** F1 埋点增量归一：非数字/负值 → 0；单次上限 1000（防一次请求把计数写爆） */
@@ -784,68 +871,75 @@ export function apply(ctx: Context) {
           // 与 corrected / learn 并列，三者可同时出现；读取仍走本路由的 GET（content.stats.draftTakes）。
           const draftTake = normalizeDraftTake(body && body.draftTake)
           if (!delta && !learn && !draftTake) { json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} 、 {learn:{wrong,right}} 或 {draftTake:1}' }); return }
-          let doc: any = null
-          try { doc = JSON.parse(await readFile(file, 'utf8')) } catch { /* 见下 */ }
-          if (!doc || typeof doc !== 'object') { json(res, 404, { error: 'user memory file missing or unreadable' }); return }
-          doc.stats = doc.stats && typeof doc.stats === 'object' ? doc.stats : {}
+          // CR-23118 ②：同一文件的「读—改—写」串行化（进程内按路径排队）+ 临时文件 rename 原子替换。
+          // corrected / learn / draftTake 共用这一条队列，跨请求不再互相覆盖（响应结构与字段名不变）。
+          const out = await withFileLock(file, async (): Promise<{ status: number; body: any }> => {
+            let doc: any = null
+            try { doc = JSON.parse(await readFile(file, 'utf8')) } catch { /* 见下 */ }
+            if (!doc || typeof doc !== 'object') return { status: 404, body: { error: 'user memory file missing or unreadable' } }
+            doc.stats = doc.stats && typeof doc.stats === 'object' ? doc.stats : {}
 
-          // ⓪ 主路径采用度计数（F1 · 缺陷 #52：字段名定死 stats.draftTakes）
-          if (draftTake) {
-            doc.stats.draftTakes = Math.floor(Number(doc.stats.draftTakes) || 0) + draftTake
-          }
-
-          // ① 记一次纠错（审计）
-          let added = 0
-          if (delta) {
-            doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === 'object' ? doc.stats.corrected : {}
-            for (const [k, v] of Object.entries(delta as Record<string, unknown>)) {
-              const n = Math.max(0, Math.min(1000, Math.floor(Number(v) || 0)))
-              if (!n) continue
-              doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n
-              added += n
+            // ⓪ 主路径采用度计数（F1 · 缺陷 #52：字段名定死 stats.draftTakes）
+            if (draftTake) {
+              doc.stats.draftTakes = Math.floor(Number(doc.stats.draftTakes) || 0) + draftTake
             }
-          }
 
-          // ② 学一条纠正（F1 自动学习；缺陷 #20 的根治入口 —— 不依赖 duet 转交，页面/草稿也能学）
-          //    规则（Q003）：用户明确纠正才写；条目带 source；幂等（不重复添加）；只写用户级（AC5）
-          let learned: any = null
-          if (learn) {
-            const wrong = typeof learn.wrong === 'string' ? learn.wrong.trim() : ''
-            const right = typeof learn.right === 'string' ? learn.right.trim() : ''
-            if (!wrong || !right || wrong === right || wrong.length > 40 || right.length > 40) {
-              json(res, 400, { error: 'learn 需要 {wrong,right}：非空、不相等、各 ≤40 字' }); return
+            // ① 记一次纠错（审计）
+            let added = 0
+            if (delta) {
+              doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === 'object' ? doc.stats.corrected : {}
+              for (const [k, v] of Object.entries(delta as Record<string, unknown>)) {
+                const n = Math.max(0, Math.min(1000, Math.floor(Number(v) || 0)))
+                if (!n) continue
+                doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n
+                added += n
+              }
             }
-            const nowIso = new Date().toISOString()
-            const src = { by: 'user', how: String(learn.how || '页面「记下纠正」'), at: nowIso }
-            doc.homophones = Array.isArray(doc.homophones) ? doc.homophones : []
-            doc.people = Array.isArray(doc.people) ? doc.people : []
-            const existed = doc.homophones.some((h: any) => h && h.wrong === wrong && h.right === right)
-            if (!existed) doc.homophones.push({ wrong, right, ambiguous: false, source: src })
-            let aliasAdded = false
-            const person = doc.people.find((p: any) => p && p.canonical === right)
-            if (person) {
-              person.aliases = Array.isArray(person.aliases) ? person.aliases : []
-              if (!person.aliases.includes(wrong)) { person.aliases.push(wrong); aliasAdded = true }
-              person.lastUsedAt = nowIso
-            } else {
-              doc.people.push({ canonical: right, aliases: [wrong], note: '', source: src, lastUsedAt: nowIso })
-              aliasAdded = true
-            }
-            if (!Array.isArray(doc.terms)) doc.terms = []
-            if (!doc.terms.includes(right)) doc.terms.push(right)
-            learned = { wrong, right, homophoneAdded: !existed, aliasAdded }
-          }
 
-          doc.savedAt = Date.now()
-          const fsx = await import('node:fs/promises')
-          await fsx.writeFile(file, JSON.stringify(doc, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
-          json(res, 200, {
-            ok: true,
-            added,
-            corrected: (doc.stats && doc.stats.corrected) || {},
-            draftTakes: Math.floor(Number(doc.stats && doc.stats.draftTakes) || 0),
-            learned,
+            // ② 学一条纠正（F1 自动学习；缺陷 #20 的根治入口 —— 不依赖 duet 转交，页面/草稿也能学）
+            //    规则（Q003）：用户明确纠正才写；条目带 source；幂等（不重复添加）；只写用户级（AC5）
+            let learned: any = null
+            if (learn) {
+              const wrong = typeof learn.wrong === 'string' ? learn.wrong.trim() : ''
+              const right = typeof learn.right === 'string' ? learn.right.trim() : ''
+              if (!wrong || !right || wrong === right || wrong.length > 40 || right.length > 40) {
+                return { status: 400, body: { error: 'learn 需要 {wrong,right}：非空、不相等、各 ≤40 字' } }
+              }
+              const nowIso = new Date().toISOString()
+              const src = { by: 'user', how: String(learn.how || '页面「记下纠正」'), at: nowIso }
+              doc.homophones = Array.isArray(doc.homophones) ? doc.homophones : []
+              doc.people = Array.isArray(doc.people) ? doc.people : []
+              const existed = doc.homophones.some((h: any) => h && h.wrong === wrong && h.right === right)
+              if (!existed) doc.homophones.push({ wrong, right, ambiguous: false, source: src })
+              let aliasAdded = false
+              const person = doc.people.find((p: any) => p && p.canonical === right)
+              if (person) {
+                person.aliases = Array.isArray(person.aliases) ? person.aliases : []
+                if (!person.aliases.includes(wrong)) { person.aliases.push(wrong); aliasAdded = true }
+                person.lastUsedAt = nowIso
+              } else {
+                doc.people.push({ canonical: right, aliases: [wrong], note: '', source: src, lastUsedAt: nowIso })
+                aliasAdded = true
+              }
+              if (!Array.isArray(doc.terms)) doc.terms = []
+              if (!doc.terms.includes(right)) doc.terms.push(right)
+              learned = { wrong, right, homophoneAdded: !existed, aliasAdded }
+            }
+
+            doc.savedAt = Date.now()
+            await writeFileAtomic(file, JSON.stringify(doc, null, 2) + '\n', 0o600)
+            return {
+              status: 200,
+              body: {
+                ok: true,
+                added,
+                corrected: (doc.stats && doc.stats.corrected) || {},
+                draftTakes: Math.floor(Number(doc.stats && doc.stats.draftTakes) || 0),
+                learned,
+              },
+            }
           })
+          json(res, out.status, out.body)
           return
         }
 
@@ -872,13 +966,17 @@ export function apply(ctx: Context) {
   })
 
   // F5 开关（REQ-20261008-0010）：只读暴露 $DSH_HOME/worktable-voice.json 的 voiceAsrEnabled。
-  // 本 REQ **不实现 F2**（本地转写桥等 M0 判据），这里只是把开关读起来 + 让页面看得见。
+  // CR-23118 ③：坏 JSON / 非布尔 / 读失败不再静默 —— 回显 invalid:true + error 短枚举（值仍按默认 true），
+  // 并写一行宿主告警（日志只含枚举与固定文件名，不含文件内容/绝对路径）。
   const voiceConfig = loadVoiceConfig()
+  if (voiceConfig.invalid) {
+    try { ctx.logger?.warn?.(voiceConfigInvalidWarning(String(voiceConfig.error || 'invalid'))) } catch { /* 日志失败忽略 */ }
+  }
   register({
     kind: 'exact',
     path: '/api/worktable/voice-config',
     handler: (_req: any, res: any) => {
-      json(res, 200, { voiceAsrEnabled: voiceConfig.voiceAsrEnabled, exists: voiceConfig.exists })
+      json(res, 200, voiceConfig)
     },
   })
 

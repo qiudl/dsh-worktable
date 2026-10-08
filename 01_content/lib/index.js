@@ -1,8 +1,8 @@
 // src/index.ts
 import { execFile } from "node:child_process";
-import { readdirSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve as pathResolve, sep } from "node:path";
+import { basename, dirname, resolve as pathResolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -247,9 +247,35 @@ function parseLegacyMatch(name2) {
 function textMentionsLegacy(text) {
   return typeof text === "string" && text.includes("dsh-client-ui-voice");
 }
+function stripYamlLineComment(line) {
+  let quote = "";
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (quote === '"' && c === "\\") {
+        i++;
+        continue;
+      }
+      if (c === quote) {
+        if (quote === "'" && line[i + 1] === "'") {
+          i++;
+          continue;
+        }
+        quote = "";
+      }
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      continue;
+    }
+    if (c === "#" && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+  }
+  return line;
+}
 function textMentionsLegacyEntry(text) {
   if (typeof text !== "string") return false;
-  const entryText = text.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+  const entryText = text.split("\n").map(stripYamlLineComment).join("\n");
   return textMentionsLegacy(entryText);
 }
 function detectLegacyLoaded(entries) {
@@ -304,22 +330,56 @@ function firstReadable(candidates, read) {
   }
   return null;
 }
+var VOICE_CONFIG_ERRORS = ["bad-json", "not-object", "not-boolean", "read-failed"];
 function parseVoiceConfig(raw) {
+  if (typeof raw !== "string") return { voiceAsrEnabled: true };
+  let doc;
   try {
-    const doc = typeof raw === "string" ? JSON.parse(raw) : null;
-    if (doc && typeof doc === "object" && typeof doc.voiceAsrEnabled === "boolean") {
-      return { voiceAsrEnabled: doc.voiceAsrEnabled };
-    }
+    doc = JSON.parse(raw);
   } catch {
+    return { voiceAsrEnabled: true, invalid: true, error: "bad-json" };
   }
-  return { voiceAsrEnabled: true };
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return { voiceAsrEnabled: true, invalid: true, error: "not-object" };
+  if (typeof doc.voiceAsrEnabled !== "boolean") return { voiceAsrEnabled: true, invalid: true, error: "not-boolean" };
+  return { voiceAsrEnabled: doc.voiceAsrEnabled };
 }
 function loadVoiceConfig() {
+  const file = pathResolve(resolveDshHomeSafe(), "worktable-voice.json");
+  let raw;
   try {
-    const file = pathResolve(resolveDshHomeSafe(), "worktable-voice.json");
-    return { ...parseVoiceConfig(readFileSync(file, "utf8")), exists: true };
+    raw = readFileSync(file, "utf8");
   } catch {
-    return { voiceAsrEnabled: true, exists: false };
+    if (existsSync(file)) {
+      return { voiceAsrEnabled: true, exists: true, source: "default", invalid: true, error: "read-failed" };
+    }
+    return { voiceAsrEnabled: true, exists: false, source: "default" };
+  }
+  const parsed = parseVoiceConfig(raw);
+  if (parsed.invalid) return { voiceAsrEnabled: parsed.voiceAsrEnabled, exists: true, source: "default", invalid: true, error: parsed.error };
+  return { voiceAsrEnabled: parsed.voiceAsrEnabled, exists: true, source: "file" };
+}
+function voiceConfigInvalidWarning(error) {
+  return "[dsh-worktable] \u26A0\uFE0F \u8BED\u97F3\u5F00\u5173\u914D\u7F6E\u65E0\u6548\uFF08$DSH_HOME/worktable-voice.json\uFF1A" + error + "\uFF09\u2192 voiceAsrEnabled \u5DF2\u6309\u9ED8\u8BA4 true \u751F\u6548\uFF1B\u8BF7\u4FEE\u6B63\u8BE5\u6587\u4EF6\uFF08\u6216\u5220\u6389\u5B83\u8D70\u9ED8\u8BA4\uFF09";
+}
+var fileQueues = /* @__PURE__ */ new Map();
+function withFileLock(file, task) {
+  const prev = fileQueues.get(file) ?? Promise.resolve();
+  const run = prev.then(task, task);
+  fileQueues.set(file, run.then(() => void 0, () => void 0));
+  return run;
+}
+async function writeFileAtomic(file, data, mode) {
+  const fsx = await import("node:fs/promises");
+  const tmp = pathResolve(dirname(file), "." + basename(file) + "." + process.pid + "." + Date.now().toString(36) + "." + Math.random().toString(36).slice(2, 8) + ".tmp");
+  await fsx.writeFile(tmp, data, { encoding: "utf8", mode });
+  try {
+    await fsx.rename(tmp, file);
+  } catch (err) {
+    try {
+      await fsx.unlink(tmp);
+    } catch {
+    }
+    throw err;
   }
 }
 function normalizeDraftTake(value) {
@@ -825,70 +885,71 @@ function apply(ctx) {
             json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} \u3001 {learn:{wrong,right}} \u6216 {draftTake:1}' });
             return;
           }
-          let doc = null;
-          try {
-            doc = JSON.parse(await readFile(file, "utf8"));
-          } catch {
-          }
-          if (!doc || typeof doc !== "object") {
-            json(res, 404, { error: "user memory file missing or unreadable" });
-            return;
-          }
-          doc.stats = doc.stats && typeof doc.stats === "object" ? doc.stats : {};
-          if (draftTake) {
-            doc.stats.draftTakes = Math.floor(Number(doc.stats.draftTakes) || 0) + draftTake;
-          }
-          let added = 0;
-          if (delta) {
-            doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === "object" ? doc.stats.corrected : {};
-            for (const [k, v] of Object.entries(delta)) {
-              const n = Math.max(0, Math.min(1e3, Math.floor(Number(v) || 0)));
-              if (!n) continue;
-              doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n;
-              added += n;
+          const out = await withFileLock(file, async () => {
+            let doc = null;
+            try {
+              doc = JSON.parse(await readFile(file, "utf8"));
+            } catch {
             }
-          }
-          let learned = null;
-          if (learn) {
-            const wrong = typeof learn.wrong === "string" ? learn.wrong.trim() : "";
-            const right = typeof learn.right === "string" ? learn.right.trim() : "";
-            if (!wrong || !right || wrong === right || wrong.length > 40 || right.length > 40) {
-              json(res, 400, { error: "learn \u9700\u8981 {wrong,right}\uFF1A\u975E\u7A7A\u3001\u4E0D\u76F8\u7B49\u3001\u5404 \u226440 \u5B57" });
-              return;
+            if (!doc || typeof doc !== "object") return { status: 404, body: { error: "user memory file missing or unreadable" } };
+            doc.stats = doc.stats && typeof doc.stats === "object" ? doc.stats : {};
+            if (draftTake) {
+              doc.stats.draftTakes = Math.floor(Number(doc.stats.draftTakes) || 0) + draftTake;
             }
-            const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-            const src = { by: "user", how: String(learn.how || "\u9875\u9762\u300C\u8BB0\u4E0B\u7EA0\u6B63\u300D"), at: nowIso };
-            doc.homophones = Array.isArray(doc.homophones) ? doc.homophones : [];
-            doc.people = Array.isArray(doc.people) ? doc.people : [];
-            const existed = doc.homophones.some((h) => h && h.wrong === wrong && h.right === right);
-            if (!existed) doc.homophones.push({ wrong, right, ambiguous: false, source: src });
-            let aliasAdded = false;
-            const person = doc.people.find((p) => p && p.canonical === right);
-            if (person) {
-              person.aliases = Array.isArray(person.aliases) ? person.aliases : [];
-              if (!person.aliases.includes(wrong)) {
-                person.aliases.push(wrong);
+            let added = 0;
+            if (delta) {
+              doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === "object" ? doc.stats.corrected : {};
+              for (const [k, v] of Object.entries(delta)) {
+                const n = Math.max(0, Math.min(1e3, Math.floor(Number(v) || 0)));
+                if (!n) continue;
+                doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n;
+                added += n;
+              }
+            }
+            let learned = null;
+            if (learn) {
+              const wrong = typeof learn.wrong === "string" ? learn.wrong.trim() : "";
+              const right = typeof learn.right === "string" ? learn.right.trim() : "";
+              if (!wrong || !right || wrong === right || wrong.length > 40 || right.length > 40) {
+                return { status: 400, body: { error: "learn \u9700\u8981 {wrong,right}\uFF1A\u975E\u7A7A\u3001\u4E0D\u76F8\u7B49\u3001\u5404 \u226440 \u5B57" } };
+              }
+              const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+              const src = { by: "user", how: String(learn.how || "\u9875\u9762\u300C\u8BB0\u4E0B\u7EA0\u6B63\u300D"), at: nowIso };
+              doc.homophones = Array.isArray(doc.homophones) ? doc.homophones : [];
+              doc.people = Array.isArray(doc.people) ? doc.people : [];
+              const existed = doc.homophones.some((h) => h && h.wrong === wrong && h.right === right);
+              if (!existed) doc.homophones.push({ wrong, right, ambiguous: false, source: src });
+              let aliasAdded = false;
+              const person = doc.people.find((p) => p && p.canonical === right);
+              if (person) {
+                person.aliases = Array.isArray(person.aliases) ? person.aliases : [];
+                if (!person.aliases.includes(wrong)) {
+                  person.aliases.push(wrong);
+                  aliasAdded = true;
+                }
+                person.lastUsedAt = nowIso;
+              } else {
+                doc.people.push({ canonical: right, aliases: [wrong], note: "", source: src, lastUsedAt: nowIso });
                 aliasAdded = true;
               }
-              person.lastUsedAt = nowIso;
-            } else {
-              doc.people.push({ canonical: right, aliases: [wrong], note: "", source: src, lastUsedAt: nowIso });
-              aliasAdded = true;
+              if (!Array.isArray(doc.terms)) doc.terms = [];
+              if (!doc.terms.includes(right)) doc.terms.push(right);
+              learned = { wrong, right, homophoneAdded: !existed, aliasAdded };
             }
-            if (!Array.isArray(doc.terms)) doc.terms = [];
-            if (!doc.terms.includes(right)) doc.terms.push(right);
-            learned = { wrong, right, homophoneAdded: !existed, aliasAdded };
-          }
-          doc.savedAt = Date.now();
-          const fsx = await import("node:fs/promises");
-          await fsx.writeFile(file, JSON.stringify(doc, null, 2) + "\n", { encoding: "utf8", mode: 384 });
-          json(res, 200, {
-            ok: true,
-            added,
-            corrected: doc.stats && doc.stats.corrected || {},
-            draftTakes: Math.floor(Number(doc.stats && doc.stats.draftTakes) || 0),
-            learned
+            doc.savedAt = Date.now();
+            await writeFileAtomic(file, JSON.stringify(doc, null, 2) + "\n", 384);
+            return {
+              status: 200,
+              body: {
+                ok: true,
+                added,
+                corrected: doc.stats && doc.stats.corrected || {},
+                draftTakes: Math.floor(Number(doc.stats && doc.stats.draftTakes) || 0),
+                learned
+              }
+            };
           });
+          json(res, out.status, out.body);
           return;
         }
         res.writeHead(405);
@@ -912,11 +973,17 @@ function apply(ctx) {
     }
   });
   const voiceConfig = loadVoiceConfig();
+  if (voiceConfig.invalid) {
+    try {
+      ctx.logger?.warn?.(voiceConfigInvalidWarning(String(voiceConfig.error || "invalid")));
+    } catch {
+    }
+  }
   register({
     kind: "exact",
     path: "/api/worktable/voice-config",
     handler: (_req, res) => {
-      json(res, 200, { voiceAsrEnabled: voiceConfig.voiceAsrEnabled, exists: voiceConfig.exists });
+      json(res, 200, voiceConfig);
     }
   });
   scheduleVoiceCheck(ctx);
@@ -1082,6 +1149,7 @@ export {
   LEGACY_VOICE_WARNING,
   VOICE_CHECK_CONCLUSIONS,
   VOICE_CHECK_FIELDS,
+  VOICE_CONFIG_ERRORS,
   __wtLoadProbeStats,
   apply,
   buildCheckPayload,
@@ -1095,6 +1163,10 @@ export {
   parseVoiceConfig,
   patchCandidates,
   pickVoiceCheckFields,
+  stripYamlLineComment,
   textMentionsLegacy,
-  textMentionsLegacyEntry
+  textMentionsLegacyEntry,
+  voiceConfigInvalidWarning,
+  withFileLock,
+  writeFileAtomic
 };
