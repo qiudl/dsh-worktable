@@ -565,23 +565,59 @@ export function apply(ctx: Context) {
         if (req.method === 'POST') {
           const body = await readJsonBody(req)
           const delta = body && typeof body.corrected === 'object' && body.corrected ? body.corrected : null
-          if (!delta) { json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}}' }); return }
+          const learn = body && body.learn && typeof body.learn === 'object' ? body.learn : null
+          if (!delta && !learn) { json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} 或 {learn:{wrong,right}}' }); return }
           let doc: any = null
           try { doc = JSON.parse(await readFile(file, 'utf8')) } catch { /* 见下 */ }
           if (!doc || typeof doc !== 'object') { json(res, 404, { error: 'user memory file missing or unreadable' }); return }
-          doc.stats = doc.stats && typeof doc.stats === 'object' ? doc.stats : {}
-          doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === 'object' ? doc.stats.corrected : {}
+
+          // ① 记一次纠错（审计）
           let added = 0
-          for (const [k, v] of Object.entries(delta as Record<string, unknown>)) {
-            const n = Math.max(0, Math.min(1000, Math.floor(Number(v) || 0)))
-            if (!n) continue
-            doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n
-            added += n
+          if (delta) {
+            doc.stats = doc.stats && typeof doc.stats === 'object' ? doc.stats : {}
+            doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === 'object' ? doc.stats.corrected : {}
+            for (const [k, v] of Object.entries(delta as Record<string, unknown>)) {
+              const n = Math.max(0, Math.min(1000, Math.floor(Number(v) || 0)))
+              if (!n) continue
+              doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n
+              added += n
+            }
           }
+
+          // ② 学一条纠正（F1 自动学习；缺陷 #20 的根治入口 —— 不依赖 duet 转交，页面/草稿也能学）
+          //    规则（Q003）：用户明确纠正才写；条目带 source；幂等（不重复添加）；只写用户级（AC5）
+          let learned: any = null
+          if (learn) {
+            const wrong = typeof learn.wrong === 'string' ? learn.wrong.trim() : ''
+            const right = typeof learn.right === 'string' ? learn.right.trim() : ''
+            if (!wrong || !right || wrong === right || wrong.length > 40 || right.length > 40) {
+              json(res, 400, { error: 'learn 需要 {wrong,right}：非空、不相等、各 ≤40 字' }); return
+            }
+            const nowIso = new Date().toISOString()
+            const src = { by: 'user', how: String(learn.how || '页面「记下纠正」'), at: nowIso }
+            doc.homophones = Array.isArray(doc.homophones) ? doc.homophones : []
+            doc.people = Array.isArray(doc.people) ? doc.people : []
+            const existed = doc.homophones.some((h: any) => h && h.wrong === wrong && h.right === right)
+            if (!existed) doc.homophones.push({ wrong, right, ambiguous: false, source: src })
+            let aliasAdded = false
+            const person = doc.people.find((p: any) => p && p.canonical === right)
+            if (person) {
+              person.aliases = Array.isArray(person.aliases) ? person.aliases : []
+              if (!person.aliases.includes(wrong)) { person.aliases.push(wrong); aliasAdded = true }
+              person.lastUsedAt = nowIso
+            } else {
+              doc.people.push({ canonical: right, aliases: [wrong], note: '', source: src, lastUsedAt: nowIso })
+              aliasAdded = true
+            }
+            if (!Array.isArray(doc.terms)) doc.terms = []
+            if (!doc.terms.includes(right)) doc.terms.push(right)
+            learned = { wrong, right, homophoneAdded: !existed, aliasAdded }
+          }
+
           doc.savedAt = Date.now()
           const fsx = await import('node:fs/promises')
           await fsx.writeFile(file, JSON.stringify(doc, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
-          json(res, 200, { ok: true, added, corrected: doc.stats.corrected })
+          json(res, 200, { ok: true, added, corrected: (doc.stats && doc.stats.corrected) || {}, learned })
           return
         }
 

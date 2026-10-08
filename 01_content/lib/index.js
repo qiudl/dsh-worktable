@@ -658,8 +658,9 @@ function apply(ctx) {
         if (req.method === "POST") {
           const body = await readJsonBody(req);
           const delta = body && typeof body.corrected === "object" && body.corrected ? body.corrected : null;
-          if (!delta) {
-            json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}}' });
+          const learn = body && body.learn && typeof body.learn === "object" ? body.learn : null;
+          if (!delta && !learn) {
+            json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} \u6216 {learn:{wrong,right}}' });
             return;
           }
           let doc = null;
@@ -671,19 +672,52 @@ function apply(ctx) {
             json(res, 404, { error: "user memory file missing or unreadable" });
             return;
           }
-          doc.stats = doc.stats && typeof doc.stats === "object" ? doc.stats : {};
-          doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === "object" ? doc.stats.corrected : {};
           let added = 0;
-          for (const [k, v] of Object.entries(delta)) {
-            const n = Math.max(0, Math.min(1e3, Math.floor(Number(v) || 0)));
-            if (!n) continue;
-            doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n;
-            added += n;
+          if (delta) {
+            doc.stats = doc.stats && typeof doc.stats === "object" ? doc.stats : {};
+            doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === "object" ? doc.stats.corrected : {};
+            for (const [k, v] of Object.entries(delta)) {
+              const n = Math.max(0, Math.min(1e3, Math.floor(Number(v) || 0)));
+              if (!n) continue;
+              doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n;
+              added += n;
+            }
+          }
+          let learned = null;
+          if (learn) {
+            const wrong = typeof learn.wrong === "string" ? learn.wrong.trim() : "";
+            const right = typeof learn.right === "string" ? learn.right.trim() : "";
+            if (!wrong || !right || wrong === right || wrong.length > 40 || right.length > 40) {
+              json(res, 400, { error: "learn \u9700\u8981 {wrong,right}\uFF1A\u975E\u7A7A\u3001\u4E0D\u76F8\u7B49\u3001\u5404 \u226440 \u5B57" });
+              return;
+            }
+            const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+            const src = { by: "user", how: String(learn.how || "\u9875\u9762\u300C\u8BB0\u4E0B\u7EA0\u6B63\u300D"), at: nowIso };
+            doc.homophones = Array.isArray(doc.homophones) ? doc.homophones : [];
+            doc.people = Array.isArray(doc.people) ? doc.people : [];
+            const existed = doc.homophones.some((h) => h && h.wrong === wrong && h.right === right);
+            if (!existed) doc.homophones.push({ wrong, right, ambiguous: false, source: src });
+            let aliasAdded = false;
+            const person = doc.people.find((p) => p && p.canonical === right);
+            if (person) {
+              person.aliases = Array.isArray(person.aliases) ? person.aliases : [];
+              if (!person.aliases.includes(wrong)) {
+                person.aliases.push(wrong);
+                aliasAdded = true;
+              }
+              person.lastUsedAt = nowIso;
+            } else {
+              doc.people.push({ canonical: right, aliases: [wrong], note: "", source: src, lastUsedAt: nowIso });
+              aliasAdded = true;
+            }
+            if (!Array.isArray(doc.terms)) doc.terms = [];
+            if (!doc.terms.includes(right)) doc.terms.push(right);
+            learned = { wrong, right, homophoneAdded: !existed, aliasAdded };
           }
           doc.savedAt = Date.now();
           const fsx = await import("node:fs/promises");
           await fsx.writeFile(file, JSON.stringify(doc, null, 2) + "\n", { encoding: "utf8", mode: 384 });
-          json(res, 200, { ok: true, added, corrected: doc.stats.corrected });
+          json(res, 200, { ok: true, added, corrected: doc.stats && doc.stats.corrected || {}, learned });
           return;
         }
         res.writeHead(405);
