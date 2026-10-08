@@ -362,8 +362,12 @@ function voiceConfigInvalidWarning(error) {
   return "[dsh-worktable] \u26A0\uFE0F \u8BED\u97F3\u5F00\u5173\u914D\u7F6E\u65E0\u6548\uFF08$DSH_HOME/worktable-voice.json\uFF1A" + error + "\uFF09\u2192 voiceAsrEnabled \u5DF2\u6309\u9ED8\u8BA4 true \u751F\u6548\uFF1B\u8BF7\u4FEE\u6B63\u8BE5\u6587\u4EF6\uFF08\u6216\u5220\u6389\u5B83\u8D70\u9ED8\u8BA4\uFF09";
 }
 var VOICE_ASR_MAX_BYTES = 4 * 1024 * 1024;
-var VOICE_ASR_TIMEOUT_MS = 15e3;
-var VOICE_ASR_REASONS = ["disabled", "rejected", "unavailable", "failed"];
+var VOICE_ASR_RESPONSE_DEADLINE_MS = 18e3;
+var VOICE_ASR_PROVIDER_TIMEOUT_MS = 6e4;
+var VOICE_ASR_MAX_INFLIGHT = 2;
+var VOICE_ASR_MAX_PER_MINUTE = 30;
+var READ_JSON_MAX_BYTES = 32 * 1024 * 1024;
+var VOICE_ASR_REASONS = ["disabled", "rejected", "unavailable", "failed", "timeout", "busy", "rate-limited"];
 function checkVoiceWaveBounds(bytes, maxBytes = VOICE_ASR_MAX_BYTES) {
   const n = bytes?.byteLength;
   return typeof n === "number" && Number.isFinite(n) && n > 44 && n <= maxBytes;
@@ -371,10 +375,36 @@ function checkVoiceWaveBounds(bytes, maxBytes = VOICE_ASR_MAX_BYTES) {
 function voiceAsrLogLine(reason) {
   return "[dsh-worktable] /api/voice/asr \u672C\u5730\u8F6C\u5199\u6865\uFF1A" + reason + "\uFF08\u8FD4\u56DE\u7A7A\u6587\u672C\uFF1B\u97F3\u9891\u4E0D\u843D\u76D8\uFF09";
 }
-async function readRawBody(req) {
+async function readBodyLimited(req, maxBytes) {
+  const declared = Number(req?.headers?.["content-length"]);
+  if (Number.isFinite(declared) && declared > maxBytes) return { ok: false, reason: "too-large" };
   const chunks = [];
-  for await (const chunk of req) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  return new Uint8Array(Buffer.concat(chunks));
+  let total = 0;
+  try {
+    for await (const chunk of req) {
+      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      total += buf.length;
+      if (total > maxBytes) {
+        try {
+          req?.destroy?.();
+        } catch {
+        }
+        return { ok: false, reason: "too-large" };
+      }
+      chunks.push(buf);
+    }
+  } catch {
+    try {
+      req?.destroy?.();
+    } catch {
+    }
+    return { ok: false, reason: "too-large" };
+  }
+  return { ok: true, bytes: Buffer.concat(chunks) };
+}
+async function readRawBody(req, maxBytes = VOICE_ASR_MAX_BYTES) {
+  const read = await readBodyLimited(req, maxBytes);
+  return read.ok ? read.bytes : null;
 }
 var fileQueues = /* @__PURE__ */ new Map();
 function withFileLock(file, task) {
@@ -524,10 +554,10 @@ function writePathReject(abs) {
   });
   return inside ? void 0 : "outside project folders";
 }
-async function readJsonBody(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  const text = Buffer.concat(chunks).toString("utf8");
+async function readJsonBody(req, maxBytes = READ_JSON_MAX_BYTES) {
+  const read = await readBodyLimited(req, maxBytes);
+  if (!read.ok) return {};
+  const text = read.bytes.toString("utf8");
   if (!text) return {};
   try {
     return JSON.parse(text);
@@ -673,7 +703,7 @@ async function readLocalConfigField(fileName, field) {
   }
   return null;
 }
-function apply(ctx) {
+function apply(ctx, voiceLimitOverrides) {
   const webServer = ctx.webServer;
   if (!webServer) {
     ctx.logger?.warn("[dsh-worktable] ctx.webServer \u4E0D\u53EF\u7528\uFF08headless profile\uFF1F\uFF09\uFF0C\u8DF3\u8FC7\u670D\u52A1\u7AEF\u8DEF\u7531");
@@ -1036,6 +1066,15 @@ function apply(ctx) {
     } catch {
     }
   };
+  const voiceLimits = {
+    responseDeadlineMs: voiceLimitOverrides?.responseDeadlineMs ?? VOICE_ASR_RESPONSE_DEADLINE_MS,
+    providerTimeoutMs: voiceLimitOverrides?.providerTimeoutMs ?? VOICE_ASR_PROVIDER_TIMEOUT_MS,
+    maxInflight: voiceLimitOverrides?.maxInflight ?? VOICE_ASR_MAX_INFLIGHT,
+    maxPerMinute: voiceLimitOverrides?.maxPerMinute ?? VOICE_ASR_MAX_PER_MINUTE,
+    rawMaxBytes: voiceLimitOverrides?.rawMaxBytes ?? VOICE_ASR_MAX_BYTES
+  };
+  let voiceInFlight = 0;
+  const voiceRateStamps = [];
   try {
     register({
       kind: "exact",
@@ -1046,9 +1085,23 @@ function apply(ctx) {
           json(res, 200, { text: "" });
           return;
         }
+        if (voiceInFlight >= voiceLimits.maxInflight) {
+          voiceAsrLog("busy");
+          json(res, 200, { text: "" });
+          return;
+        }
+        const now = Date.now();
+        while (voiceRateStamps.length > 0 && now - voiceRateStamps[0] >= 6e4) voiceRateStamps.shift();
+        if (voiceRateStamps.length >= voiceLimits.maxPerMinute) {
+          voiceAsrLog("rate-limited");
+          json(res, 200, { text: "" });
+          return;
+        }
+        voiceRateStamps.push(now);
+        voiceInFlight += 1;
         try {
-          const bytes = await readRawBody(req);
-          if (!checkVoiceWaveBounds(bytes)) {
+          const bytes = await readRawBody(req, voiceLimits.rawMaxBytes);
+          if (!bytes || !checkVoiceWaveBounds(bytes, voiceLimits.rawMaxBytes)) {
             voiceAsrLog("rejected");
             json(res, 200, { text: "" });
             return;
@@ -1065,11 +1118,38 @@ function apply(ctx) {
             return;
           }
           const spec = svc.resolve({ audio: bytes, language: "zh" });
-          const { text } = await svc.transcribe(spec, AbortSignal.timeout(VOICE_ASR_TIMEOUT_MS));
-          json(res, 200, { text: typeof text === "string" ? text : "" });
+          const inference = Promise.resolve(svc.transcribe(spec, AbortSignal.timeout(voiceLimits.providerTimeoutMs)));
+          inference.catch(() => {
+          });
+          let deadlineHit = false;
+          let deadlineTimer = null;
+          const deadline = new Promise((resolveDeadline) => {
+            deadlineTimer = setTimeout(() => {
+              deadlineHit = true;
+              resolveDeadline(void 0);
+            }, voiceLimits.responseDeadlineMs);
+            try {
+              deadlineTimer.unref?.();
+            } catch {
+            }
+          });
+          let out;
+          try {
+            out = await Promise.race([inference, deadline]);
+          } finally {
+            clearTimeout(deadlineTimer);
+          }
+          if (deadlineHit) {
+            voiceAsrLog("timeout");
+            json(res, 200, { text: "" });
+            return;
+          }
+          json(res, 200, { text: typeof out?.text === "string" ? out.text : "" });
         } catch {
           voiceAsrLog("failed");
           json(res, 200, { text: "" });
+        } finally {
+          voiceInFlight -= 1;
         }
       }
     });
@@ -1213,9 +1293,13 @@ function apply(ctx) {
 export {
   HEALTH_PATH,
   LEGACY_VOICE_WARNING,
+  READ_JSON_MAX_BYTES,
   VOICE_ASR_MAX_BYTES,
+  VOICE_ASR_MAX_INFLIGHT,
+  VOICE_ASR_MAX_PER_MINUTE,
+  VOICE_ASR_PROVIDER_TIMEOUT_MS,
   VOICE_ASR_REASONS,
-  VOICE_ASR_TIMEOUT_MS,
+  VOICE_ASR_RESPONSE_DEADLINE_MS,
   VOICE_CHECK_CONCLUSIONS,
   VOICE_CHECK_FIELDS,
   VOICE_CONFIG_ERRORS,
@@ -1233,6 +1317,8 @@ export {
   parseVoiceConfig,
   patchCandidates,
   pickVoiceCheckFields,
+  readBodyLimited,
+  readJsonBody,
   stripYamlLineComment,
   textMentionsLegacy,
   textMentionsLegacyEntry,

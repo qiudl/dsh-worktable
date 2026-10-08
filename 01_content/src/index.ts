@@ -391,10 +391,28 @@ export function voiceConfigInvalidWarning(error: string): string {
 
 /** 桥内单段上限：与官方 `api-speech-to-text` 的 `maxAudioBytes` 默认值一致（4MiB）。 */
 export const VOICE_ASR_MAX_BYTES = 4 * 1024 * 1024
-/** 桥内转写超时：duet fetch 上限 20s，桥内取 ≤15s（PRD §3.2 F2 / §5.1）。 */
-export const VOICE_ASR_TIMEOUT_MS = 15000
-/** 桥回空文本的原因短枚举（日志只回这个，**不含音频内容 / 不含路径**）。 */
-export const VOICE_ASR_REASONS = ['disabled', 'rejected', 'unavailable', 'failed'] as const
+/** 桥对 duet 的**应答期限**（CR-23122 M2）：duet 侧 fetch 上限 20s，桥取 18s，
+ *  保证"桥一定先应答"（超时回 `200 {"text":""}`，**不 5xx**）。
+ *  ⚠️ 它只决定"我们回什么"，**不**用于中止 provider（见下一个常量）。 */
+export const VOICE_ASR_RESPONSE_DEADLINE_MS = 18000
+/** 传给 provider 的 signal 超时（CR-23122 M2）：只是"兜底闸门"，取 60s 远大于正常推理/冷启动，
+ *  **不允许在推理期间触发** —— provider（speech-to-text-sensevoice）在 catch 里对非
+ *  `SpeechInputError` 执行 `await this.stop()`，会终止与主路径（输入框麦克风）**共享**的本地
+ *  worker（`…speech-to-text-sensevoice/lib/index.js:821,855-856`，见 CR 报告 M2）。 */
+export const VOICE_ASR_PROVIDER_TIMEOUT_MS = 60000
+/** 桥的并发上限（CR-23122 M3）：超过 → 不读 body、不调用识别，直接 `200 {"text":""}` + 一行 warn。 */
+export const VOICE_ASR_MAX_INFLIGHT = 2
+/** 桥的速率上限：60s 滑动窗内最多 30 次（同上，超限即回空文本）。 */
+export const VOICE_ASR_MAX_PER_MINUTE = 30
+/** `readJsonBody` 的共用前置上限（CR-23122 M1）。
+ *  取值依据（**grep 实测**，不是"顺手 1MiB"）：`readJsonBody` 原来**没有任何上限**，而它的调用方
+ *  `/api/worktable/write` 显式允许 `content` ≤20MiB（本文件「content too large」413 分支）——
+ *  取 1MiB 会把 1–20MiB 的合法 MD 保存判成"缺 path"（400），属回归。
+ *  故取 20MiB + JSON 转义余量 = 32MiB：既保住既有语义，又把"整包读进内存"的规模封顶。 */
+export const READ_JSON_MAX_BYTES = 32 * 1024 * 1024
+/** 桥回空文本的原因短枚举（日志只回这个，**不含音频内容 / 不含路径**）。
+ *  `timeout`（M2：慢，不是崩）/ `busy`、`rate-limited`（M3：限流）为 CR-23122 新增。 */
+export const VOICE_ASR_REASONS = ['disabled', 'rejected', 'unavailable', 'failed', 'timeout', 'busy', 'rate-limited'] as const
 export type VoiceAsrReason = typeof VOICE_ASR_REASONS[number]
 
 /** 桥的上限判定（沿用官方 `validateWave` 的**大小**语义）：
@@ -413,11 +431,47 @@ export function voiceAsrLogLine(reason: VoiceAsrReason | string): string {
   return '[dsh-worktable] /api/voice/asr 本地转写桥：' + reason + '（返回空文本；音频不落盘）'
 }
 
-/** 读原始请求体：桥的载荷是 WAV 字节（**不是** JSON，不能用 readJsonBody）。 */
-async function readRawBody(req: any): Promise<Uint8Array> {
+/** CR-23122 M1 共用的 body 前置上限守卫：**边读边判**，不再"整包读进内存后才看大小"。
+ *  旧实现（`readRawBody` / `readJsonBody`）把 body 全累加成 Buffer[] 再 `Buffer.concat`
+ *  （`readRawBody` 还多一次 `new Uint8Array` 拷贝）→ CR 实测 96MiB 体 → RSS ≈3×body，
+ *  且上限判定发生在拷贝**之后**。本守卫：
+ *   - 先看 `content-length`：声明值 > maxBytes → **一字节不读**（连异步迭代器都不启动）直接拒绝。
+ *     这里**不** `destroy()`：先保证 200 应答能正常发出去；未消费的 body 由 Node 按背压处理
+ *     （socket 读停在 highWaterMark），不会无界缓冲。
+ *   - 边读边累计：一越限 → **停止读取 + `req.destroy()`**（中断上传、释放 socket），返回超限。
+ *   - 无 `content-length` / 分块传输同样安全（靠累计判定兜底）。
+ *   - 中途断流 / 被销毁 → 也返回超限结果（调用方按既有失败语义处理，绝不 5xx）。
+ *  返回 Buffer（Buffer 即 Uint8Array）：`checkVoiceWaveBounds` 只读 `.byteLength`，无需再拷一次。 */
+export type BodyReadResult = { ok: true; bytes: Buffer } | { ok: false; reason: 'too-large' }
+
+export async function readBodyLimited(req: any, maxBytes: number): Promise<BodyReadResult> {
+  const declared = Number(req?.headers?.['content-length'])
+  if (Number.isFinite(declared) && declared > maxBytes) return { ok: false, reason: 'too-large' }
   const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
-  return new Uint8Array(Buffer.concat(chunks))
+  let total = 0
+  try {
+    for await (const chunk of req) {
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+      total += buf.length
+      if (total > maxBytes) {
+        try { req?.destroy?.() } catch { /* 已断开：忽略 */ }
+        return { ok: false, reason: 'too-large' }
+      }
+      chunks.push(buf)
+    }
+  } catch {
+    try { req?.destroy?.() } catch { /* 已断开：忽略 */ }
+    return { ok: false, reason: 'too-large' }
+  }
+  return { ok: true, bytes: Buffer.concat(chunks) }
+}
+
+/** 读原始请求体：桥的载荷是 WAV 字节（**不是** JSON，不能用 readJsonBody）。
+ *  CR-23122 M1：改走共用前置上限（默认 4MiB），超限在**读取途中**即被截断并 `destroy()`
+ *  （不再像旧实现那样整包读入 + concat 之后才判 4MiB）。超限/读失败 → `null`。 */
+async function readRawBody(req: any, maxBytes: number = VOICE_ASR_MAX_BYTES): Promise<Uint8Array | null> {
+  const read = await readBodyLimited(req, maxBytes)
+  return read.ok ? read.bytes : null
 }
 
 /** 进程内按文件路径串行化：同一路径的「读—改—写」排队执行（CR-23118 ②：防并发丢更新）。
@@ -576,10 +630,13 @@ function writePathReject(abs: string): string | undefined {
   return inside ? undefined : 'outside project folders'
 }
 
-async function readJsonBody(req: any): Promise<any> {
-  const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
-  const text = Buffer.concat(chunks).toString('utf8')
+/** 读 JSON body。**既有语义保持不变**：空体 / 坏 JSON → `{}`（调用方因此不会 5xx）。
+ *  CR-23122 M1：改走共用前置上限守卫（`readBodyLimited`），超限也回 `{}`（**不抛**），
+ *  不再"整包读进内存 + Buffer.concat + toString 之后"才处理；上限可用第二参注入（单测用小阈值）。 */
+export async function readJsonBody(req: any, maxBytes: number = READ_JSON_MAX_BYTES): Promise<any> {
+  const read = await readBodyLimited(req, maxBytes)
+  if (!read.ok) return {}                 // 超限（含 content-length 声明超限）→ 与坏 JSON 同形
+  const text = read.bytes.toString('utf8')
   if (!text) return {}
   try { return JSON.parse(text) } catch { return {} }
 }
@@ -719,7 +776,17 @@ async function readLocalConfigField(fileName: string, field: string): Promise<st
   return null
 }
 
-export function apply(ctx: Context) {
+/** 桥的运行时上限（CR-23122）：默认全部取上面的生产常量；
+ *  第二参**仅供单测**注入小阈值（生产/宿主不传），避免单测真等 18s。 */
+export type VoiceAsrLimitOverrides = {
+  responseDeadlineMs?: number
+  providerTimeoutMs?: number
+  maxInflight?: number
+  maxPerMinute?: number
+  rawMaxBytes?: number
+}
+
+export function apply(ctx: Context, voiceLimitOverrides?: VoiceAsrLimitOverrides) {
   const webServer = (ctx as any).webServer
   if (!webServer) {
     ctx.logger?.warn('[dsh-worktable] ctx.webServer 不可用（headless profile？），跳过服务端路由')
@@ -1055,12 +1122,23 @@ export function apply(ctx: Context) {
   // 失败只记一行日志。
   const voiceAsrLog = (reason: VoiceAsrReason) => {
     try {
-      // 停用是**预期的配置态** → info（不是告警）；拒绝/不可用/失败 → warn。
+      // 停用是**预期的配置态** → info（不是告警）；拒绝/不可用/失败/超时/限流 → warn。
       const line = voiceAsrLogLine(reason)
       if (reason === 'disabled') ctx.logger?.info?.(line)
       else ctx.logger?.warn?.(line)
     } catch { /* 日志失败忽略 */ }
   }
+  // CR-23122 M2/M3：桥的运行时上限（生产 = 常量；单测可经 apply 第二参注入小阈值）。
+  const voiceLimits = {
+    responseDeadlineMs: voiceLimitOverrides?.responseDeadlineMs ?? VOICE_ASR_RESPONSE_DEADLINE_MS,
+    providerTimeoutMs: voiceLimitOverrides?.providerTimeoutMs ?? VOICE_ASR_PROVIDER_TIMEOUT_MS,
+    maxInflight: voiceLimitOverrides?.maxInflight ?? VOICE_ASR_MAX_INFLIGHT,
+    maxPerMinute: voiceLimitOverrides?.maxPerMinute ?? VOICE_ASR_MAX_PER_MINUTE,
+    rawMaxBytes: voiceLimitOverrides?.rawMaxBytes ?? VOICE_ASR_MAX_BYTES,
+  }
+  // M3 限流状态：**每次 apply 一份**（不放在模块级，避免多实例 / 单测之间串味）。
+  let voiceInFlight = 0
+  const voiceRateStamps: number[] = []
   try {
     register({
       kind: 'exact',
@@ -1068,22 +1146,60 @@ export function apply(ctx: Context) {
       handler: async (req: any, res: any) => {
         // F5 开关（启动时快照）：停用 → 不调用识别，直接空文本 + 一行日志。
         if (!voiceConfig.voiceAsrEnabled) { voiceAsrLog('disabled'); json(res, 200, { text: '' }); return }
+        // CR-23122 M3：桥内最小限流（in-flight ≤2 + 60s 滑动窗内 ≤30 次）。
+        // 在**读 body 之前**判：超限连 body 都不读，也**不调用** resolve/transcribe，
+        // 只留一行含短枚举（busy / rate-limited）的 warn。
+        if (voiceInFlight >= voiceLimits.maxInflight) { voiceAsrLog('busy'); json(res, 200, { text: '' }); return }
+        const now = Date.now()
+        while (voiceRateStamps.length > 0 && now - voiceRateStamps[0] >= 60000) voiceRateStamps.shift()
+        if (voiceRateStamps.length >= voiceLimits.maxPerMinute) { voiceAsrLog('rate-limited'); json(res, 200, { text: '' }); return }
+        voiceRateStamps.push(now)
+        voiceInFlight += 1
         try {
-          const bytes = await readRawBody(req)
+          // CR-23122 M1：超限现在在**读体途中**就被截断（返回 null），不再"整包读进内存
+          // （96MiB 体 → RSS ≈3×body）后才在这里判 4MiB"。
+          const bytes = await readRawBody(req, voiceLimits.rawMaxBytes)
           // 上限/非法 → 按「识别为空」处理（**不抛给 duet 变成 500**），只留一行日志。
-          if (!checkVoiceWaveBounds(bytes)) { voiceAsrLog('rejected'); json(res, 200, { text: '' }); return }
+          if (!bytes || !checkVoiceWaveBounds(bytes, voiceLimits.rawMaxBytes)) { voiceAsrLog('rejected'); json(res, 200, { text: '' }); return }
           let svc: any = null
           try { svc = ctx.get?.('speechToText') ?? null } catch { svc = null }
           if (!svc || typeof svc.resolve !== 'function' || typeof svc.transcribe !== 'function') {
             voiceAsrLog('unavailable'); json(res, 200, { text: '' }); return
           }
           const spec = svc.resolve({ audio: bytes, language: 'zh' })            // 同步，返回 {provider,audio,language}
-          const { text } = await svc.transcribe(spec, AbortSignal.timeout(VOICE_ASR_TIMEOUT_MS))  // signal 必传
-          json(res, 200, { text: typeof text === 'string' ? text : '' })        // 空识别 → ""（不编造）
+          // CR-23122 M2：把「我们对 duet 的应答期限」与「provider 的中止」**解耦**。
+          //  - 传给 provider 的是 60s 长闸门：正常推理/冷启动期间**绝不触发**。原因：sensevoice
+          //    provider 的 catch 对非 SpeechInputError 执行 `await this.stop()`，会终止与主路径
+          //    （输入框麦克风）**共享**的本地 worker（…speech-to-text-sensevoice/lib/index.js:821,855-856）；
+          //    旧实现传 15s abort，推理/冷启动 >15s 时就会掐死共享 worker（CR 报告 M2）。
+          //  - 桥自己的应答期限只由下面的 Promise.race 计时：超时回 `200 {"text":""}`（**不 5xx**），
+          //    **底层推理继续跑完**（结果丢弃、catch 吞掉，防 unhandled rejection）——"慢"不再变成"崩"。
+          //    期限取 18s < duet 的 20s fetch 上限，保证桥一定先应答。
+          //  - 任何情况下都**不调用** provider.stop（我们本来也没调，只是不再用 abort 间接触发它）。
+          //  - provider 侧并发上限 `maxPending=4` 是第二道兜底（另见上面 M3 的桥内 2）。
+          const inference: Promise<any> = Promise.resolve(svc.transcribe(spec, AbortSignal.timeout(voiceLimits.providerTimeoutMs)))
+          inference.catch(() => { /* 期限到点后底层仍可能失败：必须吞掉，防 unhandled rejection */ })
+          let deadlineHit = false
+          let deadlineTimer: any = null
+          const deadline = new Promise<undefined>((resolveDeadline) => {
+            deadlineTimer = setTimeout(() => { deadlineHit = true; resolveDeadline(undefined) }, voiceLimits.responseDeadlineMs)
+            try { deadlineTimer.unref?.() } catch { /* 定时器不拖住宿主退出 */ }
+          })
+          let out: any
+          try {
+            out = await Promise.race([inference, deadline])
+          } finally {
+            clearTimeout(deadlineTimer)
+          }
+          if (deadlineHit) { voiceAsrLog('timeout'); json(res, 200, { text: '' }); return }  // 慢：回空文本，共享 worker 不受影响
+          json(res, 200, { text: typeof out?.text === 'string' ? out.text : '' })            // 空识别 → ""（不编造）
         } catch {
-          // 失败 / 超时 / 服务不可用 → 空文本（duet 侧保持 unavailable：显式失败、不编造）。
+          // 失败 / 服务不可用 → 空文本（duet 侧保持 unavailable：显式失败、不编造）。
           voiceAsrLog('failed')
           json(res, 200, { text: '' })
+        } finally {
+          // M3：无论走哪条分支（含 rejected/unavailable/timeout/failed）都要归还 in-flight 名额。
+          voiceInFlight -= 1
         }
       },
     })

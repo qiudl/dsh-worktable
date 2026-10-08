@@ -50,7 +50,10 @@ const {
   buildCheckPayload, pickVoiceCheckFields, VOICE_CHECK_FIELDS, VOICE_CHECK_CONCLUSIONS, LEGACY_VOICE_WARNING,
   catalogCandidates, patchCandidates, firstReadable, parseVoiceConfig, VOICE_CONFIG_ERRORS,
   voiceConfigInvalidWarning, normalizeDraftTake, withFileLock, writeFileAtomic,
-  checkVoiceWaveBounds, VOICE_ASR_MAX_BYTES, VOICE_ASR_TIMEOUT_MS, VOICE_ASR_REASONS, voiceAsrLogLine,
+  checkVoiceWaveBounds, VOICE_ASR_MAX_BYTES, VOICE_ASR_REASONS, voiceAsrLogLine,
+  readBodyLimited, readJsonBody, READ_JSON_MAX_BYTES,
+  VOICE_ASR_RESPONSE_DEADLINE_MS, VOICE_ASR_PROVIDER_TIMEOUT_MS,
+  VOICE_ASR_MAX_INFLIGHT, VOICE_ASR_MAX_PER_MINUTE,
 } = mod
 
 /* ── 匹配规则 ─────────────────────────────────────────────────────────────── */
@@ -513,9 +516,11 @@ function fakeWav(n) {
   return b
 }
 
-/** 假 speechToText：记录 resolve/transcribe 调用，便于断言「不得调用」 */
+/** 假 speechToText：记录 resolve/transcribe/**stop** 调用，便于断言「不得调用」。
+ *  mode='pending' → 返回**永不 resolve** 的推理（CR-23122 M2 用；由 releasePending/rejectPending 收尾）。 */
 function fakeSpeech({ text = '今天天气不错', mode = 'ok' } = {}) {
-  const calls = { resolve: 0, transcribe: 0, spec: null, signal: null, audioBytes: -1 }
+  const calls = { resolve: 0, transcribe: 0, stop: 0, spec: null, signal: null, audioBytes: -1 }
+  const pending = []
   const svc = {
     resolve: (request) => {
       calls.resolve += 1
@@ -523,14 +528,21 @@ function fakeSpeech({ text = '今天天气不错', mode = 'ok' } = {}) {
       calls.spec = { provider: { info: { id: 'fake' } }, audio: request?.audio, language: request?.language }
       return calls.spec
     },
-    transcribe: async (spec, signal) => {
+    transcribe: (spec, signal) => {
       calls.transcribe += 1
       calls.signal = signal
-      if (mode === 'throw') throw new Error('boom')
-      return mode === 'undefined' ? undefined : { text }
+      if (mode === 'throw') return Promise.reject(new Error('boom'))
+      if (mode === 'pending') return new Promise((res, rej) => pending.push({ res, rej }))
+      return Promise.resolve(mode === 'undefined' ? undefined : { text })
     },
+    // M2 断言用：桥在**任何**情况下都不得调用 provider 的 stop（会终止与主路径共享的本地 worker）
+    stop: () => { calls.stop += 1; return Promise.resolve() },
   }
-  return { svc, calls }
+  return {
+    svc, calls,
+    releasePending: (v) => { while (pending.length) pending.shift().res(v === undefined ? { text } : v) },
+    rejectPending: (e) => { while (pending.length) pending.shift().rej(e) },
+  }
 }
 
 /** 带 speechToText 的 ctx（makeCtx 不注入该服务）；register 抛错时用于 fail-soft 用例。
@@ -576,7 +588,15 @@ const M0_AVAIL = join(TMP_HOME, 'logs', 'm0-probe.json')
 
 test('checkVoiceWaveBounds: >44B 且 ≤4MiB（官方 validateWave 的大小语义）', () => {
   assert.equal(VOICE_ASR_MAX_BYTES, 4 * 1024 * 1024)
-  assert.equal(VOICE_ASR_TIMEOUT_MS, 15000, '桥内超时 ≤15s')
+  // CR-23122 M2：15s「桥内转写超时」被显式替换为「18s 应答期限 + 60s provider 兜底闸门」——
+  // 应答期限必须 < duet 的 20s fetch；provider 闸门必须远大于推理/冷启动（否则会掐死共享 worker）。
+  assert.equal(VOICE_ASR_RESPONSE_DEADLINE_MS, 18000, '桥对 duet 的应答期限 < 20s')
+  assert.ok(VOICE_ASR_RESPONSE_DEADLINE_MS < 20000)
+  assert.equal(VOICE_ASR_PROVIDER_TIMEOUT_MS, 60000, 'provider 闸门（不得在推理期间触发）')
+  assert.ok(VOICE_ASR_PROVIDER_TIMEOUT_MS > VOICE_ASR_RESPONSE_DEADLINE_MS)
+  // CR-23122 M3：桥内限流默认值
+  assert.equal(VOICE_ASR_MAX_INFLIGHT, 2)
+  assert.equal(VOICE_ASR_MAX_PER_MINUTE, 30)
   assert.equal(checkVoiceWaveBounds(fakeWav(44)), false, '恰好 44B（只有头）→ 非法')
   assert.equal(checkVoiceWaveBounds(fakeWav(45)), true)
   assert.equal(checkVoiceWaveBounds(fakeWav(VOICE_ASR_MAX_BYTES)), true, '恰好 4MiB → 允许')
@@ -590,7 +610,8 @@ test('checkVoiceWaveBounds: >44B 且 ≤4MiB（官方 validateWave 的大小语�
 })
 
 test('voiceAsrLogLine: 固定文案 + 短枚举，不含音频内容/路径', () => {
-  assert.deepEqual([...VOICE_ASR_REASONS], ['disabled', 'rejected', 'unavailable', 'failed'])
+  // CR-23122 M2/M3 新增 timeout / busy / rate-limited 三个短枚举（原四个保持不变、顺序不变）
+  assert.deepEqual([...VOICE_ASR_REASONS], ['disabled', 'rejected', 'unavailable', 'failed', 'timeout', 'busy', 'rate-limited'])
   for (const r of VOICE_ASR_REASONS) {
     const line = voiceAsrLogLine(r)
     assert.ok(line.includes(r), line)
@@ -725,6 +746,185 @@ test('构建产物 lib/index.js：含正式桥标记，不含 M0 探针产物路
   assert.ok(text.includes('AbortSignal.timeout('), '桥内转写必须带超时 signal')
   assert.equal(text.includes('m0-voice-probe'), false, 'M0 计数桩必须已移除')
   assert.equal(text.includes('m0-probe.json'), false, 'M0 可取性写入必须已移除')
+})
+
+/* ── CR-23122 M1：body 前置上限（共用守卫 readBodyLimited）───────────────────── */
+
+test('CR-23122 M1 readBodyLimited：content-length 超限 → 一字节不读即拒绝', async () => {
+  let pulls = 0
+  const req = {
+    headers: { 'content-length': String(64 * 1024) },
+    destroy() {},
+    async *[Symbol.asyncIterator]() { pulls += 1; yield Buffer.alloc(1024) },
+  }
+  const r = await readBodyLimited(req, 1024)
+  assert.equal(r.ok, false)
+  assert.equal(r.reason, 'too-large')
+  assert.equal(pulls, 0, 'content-length 已声明超限 → 连异步迭代器都不得启动（不读 body）')
+})
+
+test('CR-23122 M1 readBodyLimited：流式超限 → 停止读取并 destroy；恰好等于上限放行', async () => {
+  let pulls = 0; let destroyed = false
+  const req = {
+    headers: {},   // 无 content-length（分块传输）→ 只能靠累计判定兜底
+    destroy() { destroyed = true },
+    async *[Symbol.asyncIterator]() { for (let i = 0; i < 10; i += 1) { pulls += 1; yield Buffer.alloc(40) } },
+  }
+  const r = await readBodyLimited(req, 100)
+  assert.equal(r.ok, false)
+  assert.equal(destroyed, true, '流式超限必须 destroy 请求流（中断上传、释放 socket）')
+  assert.equal(pulls, 3, '越限即停：40+40+40>100 → 只拉 3 块（实测 ' + pulls + '）')
+
+  // 对照：恰好等于上限 → 放行（拒的是"超限"，不是"有 body"）
+  const req2 = { headers: {}, async *[Symbol.asyncIterator]() { yield Buffer.alloc(100) } }
+  const ok = await readBodyLimited(req2, 100)
+  assert.equal(ok.ok, true)
+  assert.equal(ok.bytes.byteLength, 100)
+})
+
+test('CR-23122 M1 readJsonBody：既有语义保留 + 同款前置守卫（超限 → {} 不抛）', async () => {
+  // 既有语义：正常 JSON / 空体 / 坏 JSON
+  const okReq = { headers: {}, async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({ path: '/tmp' })) } }
+  assert.deepEqual(await readJsonBody(okReq), { path: '/tmp' })
+  const emptyReq = { headers: {}, async *[Symbol.asyncIterator]() {} }
+  assert.deepEqual(await readJsonBody(emptyReq), {})
+  const badReq = { headers: {}, async *[Symbol.asyncIterator]() { yield Buffer.from('{oops') } }
+  assert.deepEqual(await readJsonBody(badReq), {})
+
+  // 新增守卫：content-length 声明超限 → 不读；流式超限 → destroy；两者都回 {}（不抛 → 调用方不会 5xx）
+  let pulls = 0
+  const bigDeclared = { headers: { 'content-length': '999999' }, destroy() {}, async *[Symbol.asyncIterator]() { pulls += 1; yield Buffer.alloc(1) } }
+  assert.deepEqual(await readJsonBody(bigDeclared, 64), {})
+  assert.equal(pulls, 0, 'content-length 声明超限 → readJsonBody 不得读 body')
+  let destroyed = false
+  const bigStream = { headers: {}, destroy() { destroyed = true }, async *[Symbol.asyncIterator]() { yield Buffer.alloc(5000) } }
+  assert.deepEqual(await readJsonBody(bigStream, 64), {})
+  assert.equal(destroyed, true)
+
+  // 取值依据（grep 实测）：readJsonBody 原来无上限，但 /api/worktable/write 显式允许 content ≤20MiB
+  // → 1MiB 会截掉 1–20MiB 的合法 MD 保存；故 = 20MiB + JSON 转义余量。
+  assert.equal(READ_JSON_MAX_BYTES, 32 * 1024 * 1024)
+})
+
+test('CR-23122 M1 既有 readJsonBody 路由（POST /api/worktable/fs）仍工作', async () => {
+  const routes = new Map(); const warns = []
+  mod.apply(makeCtx(routes, warns, [OFFICIAL_ENTRY]))
+  const res = await callRoute(routes, '/api/worktable/fs', { method: 'POST', body: { path: TMP_HOME } })
+  assert.equal(res.status, 200)
+  const body = JSON.parse(res.text)
+  assert.equal(body.path, TMP_HOME, 'JSON body 必须被正常解析（守卫不得误伤正常载荷）')
+  assert.ok(Array.isArray(body.entries))
+})
+
+test('CR-23122 M1 桥：content-length 超限 → 200 {"text":""}、不读 body、不调用识别', async () => {
+  const routes = new Map(); const warns = []
+  const { svc, calls } = fakeSpeech()
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }))
+  let pulls = 0
+  const r = await new Promise((resolve) => {
+    const res = {
+      status: 0, text: '',
+      writeHead(s) { this.status = s },
+      end(b) { this.text = b == null ? '' : String(b); resolve(this) },
+    }
+    const req = {
+      method: 'POST', url: ASR,
+      headers: { 'content-type': 'audio/wav', 'content-length': String(VOICE_ASR_MAX_BYTES + 1) },
+      destroy() {},
+      async *[Symbol.asyncIterator]() { pulls += 1; yield fakeWav(200) },
+    }
+    routes.get(ASR).handler(req, res)
+  })
+  assert.equal(r.status, 200, '超限不得 5xx（duet 侧会抛）')
+  assert.deepEqual(JSON.parse(r.text), { text: '' })
+  assert.equal(pulls, 0, '声明超限 → 桥不得读 body')
+  assert.equal(calls.resolve, 0)
+  assert.equal(calls.transcribe, 0)
+  assert.ok(warns.some((w) => w.includes('rejected')), JSON.stringify(warns))
+})
+
+/* ── CR-23122 M2：应答期限与 provider 中止解耦（不得掐死共享 worker）──────────── */
+
+test('CR-23122 M2：推理不返回 → 期限内回 200 {"text":""}、不 stop provider、晚到 reject 无 unhandled', async () => {
+  const routes = new Map(); const warns = []
+  const { svc, calls, rejectPending } = fakeSpeech({ mode: 'pending' })
+  // 单测注入 60ms 期限（生产 18s，见上面的常量断言），否则本用例要真等 18s
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }), { responseDeadlineMs: 60 })
+  const t0 = Date.now()
+  const r = await callAsr(routes, fakeWav(200))
+  const dt = Date.now() - t0
+  assert.equal(r.status, 200, '期限到点必须应答（不得 5xx）')
+  assert.deepEqual(JSON.parse(r.text), { text: '' })
+  assert.ok(dt < 5000, '注入 60ms 期限 → 应答远早于 18s（实测 ' + dt + 'ms）')
+  assert.equal(calls.transcribe, 1, '推理已启动（底层继续跑完，只是结果被丢弃）')
+  assert.equal(calls.stop, 0, '任何情况下都不得调用 provider.stop（会终止与主路径共享的 worker）')
+  assert.equal(calls.signal?.aborted, false, '传给 provider 的闸门在期限到点后仍不得是 aborted')
+  assert.ok(warns.some((w) => w.includes('timeout')), '要能区分"慢"与"崩"：' + JSON.stringify(warns))
+
+  // 底层 promise 晚到的 reject 必须是"已处理"的（否则 unhandled rejection 会打崩宿主）
+  const seen = []
+  const onUnhandled = (e) => seen.push(e)
+  process.on('unhandledRejection', onUnhandled)
+  try { rejectPending(new Error('late inference failure')); await sleep(50) } finally { process.off('unhandledRejection', onUnhandled) }
+  assert.deepEqual(seen, [], '晚到的 reject 必须被吞掉（unhandled rejection）')
+  assert.equal(calls.stop, 0, '晚到的 reject 同样不得触发 stop')
+})
+
+test('CR-23122 M2 正常链路：signal 仍为未中止的 AbortSignal，且期满前就返回文本', async () => {
+  const routes = new Map(); const warns = []
+  const { svc, calls } = fakeSpeech()
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }))
+  const r = await callAsr(routes, fakeWav(400))
+  assert.equal(r.status, 200)
+  assert.deepEqual(JSON.parse(r.text), { text: '今天天气不错' })
+  assert.ok(calls.signal instanceof AbortSignal, 'transcribe 的第二参必须仍是 AbortSignal')
+  assert.equal(calls.signal.aborted, false)
+  assert.equal(calls.stop, 0)
+})
+
+/* ── CR-23122 M3：桥内并发 / 速率限流 ──────────────────────────────────────── */
+
+test('CR-23122 M3：并发上限 2 → 第 3 个走 busy（不调用 transcribe），名额会归还', async () => {
+  const routes = new Map(); const warns = []
+  const { svc, calls, releasePending } = fakeSpeech({ mode: 'pending' })
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }))
+  const p1 = callAsr(routes, fakeWav(200))   // handler 同步跑到 in-flight++ 之后才 await
+  const p2 = callAsr(routes, fakeWav(200))
+  await sleep(20)                            // 让前两个真正进入 transcribe（占住 in-flight 名额）
+  assert.equal(calls.transcribe, 2, '前两个应已进入推理')
+  const r3 = await callAsr(routes, fakeWav(200))   // 第 3 个：in-flight 已 2 → busy
+  assert.equal(r3.status, 200)
+  assert.deepEqual(JSON.parse(r3.text), { text: '' })
+  assert.equal(calls.transcribe, 2, 'busy 分支不得调用 transcribe')
+  assert.equal(calls.resolve, 2, 'busy 分支不得调用 resolve')
+  assert.ok(warns.some((w) => w.includes('busy')), JSON.stringify(warns))
+  releasePending()   // 放掉前两个 → 验证 in-flight 会归还
+  const [r1, r2] = await Promise.all([p1, p2])
+  assert.deepEqual(JSON.parse(r1.text), { text: '今天天气不错' })
+  assert.deepEqual(JSON.parse(r2.text), { text: '今天天气不错' })
+  const p4 = callAsr(routes, fakeWav(200))
+  await sleep(20)
+  assert.equal(calls.transcribe, 3, '名额归还后必须重新放行（第 4 个不得再走 busy）')
+  assert.equal(warns.filter((w) => w.includes('busy')).length, 1, 'busy 只应记一次')
+  releasePending()
+  const r4 = await p4
+  assert.deepEqual(JSON.parse(r4.text), { text: '今天天气不错' })
+})
+
+test('CR-23122 M3：时间窗速率超限 → rate-limited（不调用 transcribe）', async () => {
+  const routes = new Map(); const warns = []
+  const { svc, calls } = fakeSpeech()
+  mod.apply(makeVoiceCtx(routes, warns, { speechToText: svc }), { maxPerMinute: 2 })
+  const r1 = await callAsr(routes, fakeWav(200))
+  const r2 = await callAsr(routes, fakeWav(200))
+  const r3 = await callAsr(routes, fakeWav(200))
+  assert.deepEqual(JSON.parse(r1.text), { text: '今天天气不错' })
+  assert.deepEqual(JSON.parse(r2.text), { text: '今天天气不错' })
+  assert.equal(r3.status, 200, 'rate-limited 也必须 200')
+  assert.deepEqual(JSON.parse(r3.text), { text: '' })
+  assert.equal(calls.transcribe, 2, 'rate-limited 分支不得调用 transcribe')
+  assert.equal(calls.resolve, 2)
+  assert.ok(warns.some((w) => w.includes('rate-limited')), JSON.stringify(warns))
 })
 
 // 自检的「第二趟」（apply 里 1.5s 后补跑）会在这之后写盘，故先等它跑完再清临时 DSH_HOME
