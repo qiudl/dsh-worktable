@@ -1,23 +1,290 @@
 // src/index.ts
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, resolve as pathResolve, sep } from "node:path";
+import { readdirSync, realpathSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
+import { dirname, resolve as pathResolve, sep as sep2 } from "node:path";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// src/requestAuth.ts
+async function requestRejection(ctx, req) {
+  try {
+    const connection = typeof ctx.get === "function" ? ctx.get("connection") : void 0;
+    if (!connection) return 503;
+    if (typeof connection.admit === "function") {
+      const admission = await connection.admit(req);
+      if (!admission || typeof admission !== "object") return 503;
+      if ("rejection" in admission) return admission.rejection === 401 ? 401 : 403;
+      const peer = admission.peer;
+      if (peer?.principal?.kind === "owner") return void 0;
+      if (peer && peer === connection.operator && peer.principal === void 0) return void 0;
+      return 403;
+    }
+  } catch {
+  }
+  return 503;
+}
+function rejectionText(status) {
+  return status === 401 ? "unauthorized" : status === 403 ? "forbidden" : "Host authentication unavailable";
+}
+
+// src/previewFiles.ts
+import { randomBytes } from "node:crypto";
+import { open, realpath, stat } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+var PREVIEW_PREFIX = "/api/worktable/preview-static";
+var PREVIEW_SANDBOX = "allow-scripts allow-forms allow-downloads";
+var PREVIEW_CSP = `sandbox ${PREVIEW_SANDBOX}; base-uri 'none'; object-src 'none'; frame-src http: https: blob: data:`;
+var PREVIEW_MAX_BYTES = 40 * 1024 * 1024;
+var IDLE_MS = 30 * 60 * 1e3;
+var MAX_MOUNTS = 128;
+function inside(root, file) {
+  const rel = relative(root, file);
+  return rel === "" || !isAbsolute(rel) && rel !== ".." && !rel.startsWith(".." + sep);
+}
+function createPreviewFiles(now = () => Date.now()) {
+  const mounts = /* @__PURE__ */ new Map();
+  const prune = () => {
+    for (const [key, item] of mounts) if (now() - item.touched >= IDLE_MS) mounts.delete(key);
+  };
+  return {
+    async mount(root) {
+      if (!isAbsolute(root)) throw new Error("Preview root must be absolute");
+      const canonical = await realpath(root);
+      if (!(await stat(canonical)).isDirectory()) throw new Error("Preview root is not a directory");
+      prune();
+      if (mounts.size >= MAX_MOUNTS) throw new Error("Too many open previews; close an unused preview first");
+      const token = randomBytes(24).toString("base64url");
+      mounts.set(token, { root: canonical, touched: now() });
+      return token;
+    },
+    revoke(token) {
+      mounts.delete(token);
+    },
+    clear() {
+      mounts.clear();
+    },
+    async file(token, segments, headOnly = false) {
+      prune();
+      const mount = mounts.get(token);
+      if (!mount) return null;
+      if (segments.some((s) => s === ".." || s.includes("/") || s.includes("\\") || s.includes("\0"))) return null;
+      let target = resolve(mount.root, ...segments);
+      if (!inside(mount.root, target)) return null;
+      let info = await stat(target).catch(() => null);
+      if (info?.isDirectory()) target = resolve(target, "index.html");
+      const canonical = await realpath(target).catch(() => null);
+      if (!canonical || !inside(mount.root, canonical)) return null;
+      const handle = await open(canonical, "r").catch(() => null);
+      if (!handle) return null;
+      try {
+        const before = await handle.stat({ bigint: true });
+        if (!before.isFile()) return null;
+        const sameFile = (other) => other.isFile() && other.dev === before.dev && other.ino === before.ino && other.size === before.size && other.mtimeNs === before.mtimeNs && other.ctimeNs === before.ctimeNs;
+        const stillValid = async () => {
+          const current = await realpath(canonical);
+          if (current !== canonical || !inside(mount.root, current)) return false;
+          const named = await stat(current, { bigint: true });
+          const opened = await handle.stat({ bigint: true });
+          return sameFile(named) && sameFile(opened) && mounts.get(token) === mount && now() - mount.touched < IDLE_MS;
+        };
+        const tooLarge = () => Object.assign(new Error("file too large"), { status: 413 });
+        if (before.size > BigInt(PREVIEW_MAX_BYTES)) throw tooLarge();
+        if (!await stillValid()) return null;
+        const chunks = [];
+        let total = 0;
+        if (!headOnly) {
+          while (total <= PREVIEW_MAX_BYTES) {
+            const chunk = Buffer.alloc(Math.min(64 * 1024, PREVIEW_MAX_BYTES + 1 - total));
+            const { bytesRead } = await handle.read(chunk, 0, chunk.length, total);
+            if (!bytesRead) break;
+            total += bytesRead;
+            if (total > PREVIEW_MAX_BYTES) throw tooLarge();
+            chunks.push(chunk.subarray(0, bytesRead));
+          }
+        }
+        if (!await stillValid() || !headOnly && BigInt(total) !== before.size) return null;
+        mount.touched = now();
+        return { path: canonical, size: Number(before.size), data: headOnly ? void 0 : Buffer.concat(chunks, total) };
+      } catch (error) {
+        if (error?.status === 413) throw error;
+        return null;
+      } finally {
+        await handle.close();
+      }
+    }
+  };
+}
+
+// src/theme.ts
+var THEME_VAR_PREFIXES = ["--dsw-", "--dsh-", "--ds-"];
+var THEME_BRIDGE_ID = "wt-theme-bridge";
+var THEME_JS_PATH = "/api/worktable/template/theme.js";
+var THEME_BRIDGE_JS = `(function () {
+  var PREFIXES = ${JSON.stringify(THEME_VAR_PREFIXES)};
+  if (window.__wtThemeBridgeInstalled) return;
+  window.__wtThemeBridgeInstalled = true;
+  function ok(name) {
+    if (!name || name.slice(0, 2) !== '--') return false;
+    for (var i = 0; i < PREFIXES.length; i++) if (name.slice(0, PREFIXES[i].length) === PREFIXES[i]) return true;
+    return false;
+  }
+  /** \u5411\u4E0A\u627E\u5230\u6700\u5916\u5C42\u540C\u6E90\u7956\u5148\u7A97\u53E3\uFF1B\u8DE8\u57DF\u6216\u5230\u9876\u5C31\u505C\u3002 */
+  function hostWindow() {
+    var w = window;
+    try {
+      for (var i = 0; i < 12; i++) {
+        var p = w.parent;
+        if (!p || p === w) break;
+        if (!p.document || !p.document.documentElement) break;
+        w = p;
+      }
+    } catch (e) { /* \u8DE8\u57DF\uFF1A\u505C\u5728\u5F53\u524D\u5C42 */ }
+    return w === window ? null : w;
+  }
+  function hostVars(host) {
+    var out = [];
+    try {
+      var el = host.document.body || host.document.documentElement;
+      if (!el) return out;
+      var cs = host.getComputedStyle(el);
+      for (var i = 0; i < cs.length; i++) {
+        var n = cs[i];
+        if (!ok(n)) continue;
+        var v = cs.getPropertyValue(n);
+        if (v && v.trim()) out.push([n, v.trim()]);
+      }
+      out.dark = el.hasAttribute && el.hasAttribute('data-ds-dark-theme');
+    } catch (e) { /* \u8BFB\u4E0D\u5230\u5C31\u9000\u56DE\u7CFB\u7EDF\u504F\u597D */ }
+    return out;
+  }
+  function systemDark() {
+    try { return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches); } catch (e) { return false; }
+  }
+  /** \u9875\u9762\u81EA\u5E26\u4E3B\u9898\u5F00\u5173\uFF1F\uFF08\u9875\u9762\u4F18\u5148\uFF0C\u6865\u4E0D\u62A2\uFF09
+   *  1) \u8FD0\u884C\u65F6\u663E\u5F0F\uFF1Awindow.__wtThemeBridgeManual = true
+   *  2) \u6807\u8BB0\uFF1A<html data-wt-theme-mode="manual">
+   *  3) \u8001\u5DE5\u4F5C\u53F0\u9875\u517C\u5BB9\uFF1A<html data-wb-theme> \u6216 localStorage['dwb.theme']\uFF08\u65E5\u8BB0\u5DE5\u4F5C\u53F0 / ai\u9012\u5F52\u5B66\u4E60\u7528\u8FD9\u5957\uFF09
+   *  \u663E\u5F0F\u8DDF\u968F\uFF1A<html data-wt-theme-mode="auto">\uFF08\u6216 <html data-wt-theme-key="\u81EA\u5DF1\u7684\u952E">\uFF09\uFF1D**\u5FFD\u7565**\u4E0A\u9762 3) \u7684
+   *  legacy \u5224\u5B9A\uFF0C\u5F3A\u5236\u8DDF\u5BBF\u4E3B\u2014\u2014\u540C\u6E90\u9875\u9762\u5171\u7528\u4E00\u4E2A localStorage \u952E\u65F6\uFF0C\u8FD9\u6761\u662F"\u6211\u53EA\u60F3\u8DDF\u5BBF\u4E3B"\u7684\u552F\u4E00\u529E\u6CD5\u3002 */
+  function pageManual() {
+    try {
+      if (window.__wtThemeBridgeManual) return true;
+      var el = document.documentElement;
+      if (el) {
+        var mode = el.getAttribute && el.getAttribute('data-wt-theme-mode');
+        if (mode === 'manual') return true;
+        if (mode === 'auto' || mode === 'host') return false;
+        if (el.hasAttribute && el.hasAttribute('data-wt-theme-key')) return false;
+        if (el.hasAttribute && el.hasAttribute('data-wb-theme')) return true;
+      }
+      var v = null;
+      try { v = localStorage.getItem('dwb.theme'); } catch (e) { v = null; }
+      if (v === 'dark' || v === 'light') return true;
+    } catch (e) { /* \u8BFB\u4E0D\u5230\u5C31\u6309\u975E\u624B\u52A8\u5904\u7406 */ }
+    return false;
+  }
+  var applied = [];
+  /** \u6E05\u6389\u6865\u5199\u8FC7\u7684\u5185\u8054 token\uFF1A\u5207\u5230\u624B\u52A8\u4E3B\u9898\u65F6\u5FC5\u987B\u8BA9\u4F4D\u7ED9\u9875\u9762\u81EA\u5DF1\u7684\u6837\u5F0F\u8868\u503C\u3002 */
+  function clearApplied() {
+    var root = document.documentElement;
+    for (var i = 0; i < applied.length; i++) {
+      try { root.style.removeProperty(applied[i]); } catch (e) {}
+      try { if (document.body) document.body.style.removeProperty(applied[i]); } catch (e) {}
+    }
+    applied = [];
+  }
+  function apply() {
+    if (pageManual()) { clearApplied(); return; }
+    var host = hostWindow();
+    var vars = host ? hostVars(host) : [];
+    var dark = host ? !!vars.dark : systemDark();
+    var root = document.documentElement;
+    for (var i = 0; i < vars.length; i++) root.style.setProperty(vars[i][0], vars[i][1]);
+    root.style.colorScheme = dark ? 'dark' : 'light';
+    if (document.body) {
+      for (var j = 0; j < vars.length; j++) document.body.style.setProperty(vars[j][0], vars[j][1]);
+      if (dark) document.body.setAttribute('data-ds-dark-theme', '');
+      else document.body.removeAttribute('data-ds-dark-theme');
+    }
+    applied = vars.map(function (p) { return p[0]; });
+  }
+  apply();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', apply, { once: true });
+  // \u9875\u9762\u81EA\u5DF1\u5207\u4E3B\u9898\uFF08data-wb-theme / data-wt-theme-mode\uFF09\u65F6\u7ACB\u523B\u91CD\u65B0\u5224\u5B9A\uFF0C\u522B\u7B49\u8F6E\u8BE2
+  try {
+    var MO0 = window.MutationObserver;
+    if (MO0) new MO0(function () { apply(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-wb-theme', 'data-wt-theme-mode'] });
+  } catch (e) { /* \u5FFD\u7565 */ }
+  var host = hostWindow();
+  if (host) {
+    try {
+      var MO = host.MutationObserver || window.MutationObserver;
+      var mo = new MO(function () { apply(); });
+      var opts = { attributes: true, attributeFilter: ['style', 'class', 'data-ds-dark-theme'] };
+      mo.observe(host.document.documentElement, opts);
+      if (host.document.body) mo.observe(host.document.body, opts);
+      host.document.addEventListener('DOMContentLoaded', function () { try { mo.observe(host.document.body, opts); } catch (e) {} apply(); });
+    } catch (e) { /* \u89C2\u6D4B\u5931\u8D25\u9760\u4E0B\u9762\u7684\u515C\u5E95\u8F6E\u8BE2 */ }
+  }
+  try {
+    var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq) { if (mq.addEventListener) mq.addEventListener('change', apply); else if (mq.addListener) mq.addListener(apply); }
+  } catch (e) { /* \u5FFD\u7565 */ }
+  window.__wtThemeBridgeApply = apply;
+  setInterval(apply, 5000);   // \u515C\u5E95\uFF1A\u5BBF\u4E3B\u6362\u4E3B\u9898\u4E5F\u53EF\u80FD\u53EA\u6362\u6837\u5F0F\u8868\u3001\u4E0D\u52A8\u5C5E\u6027
+})();`;
+function injectThemeBridge(html, external = false) {
+  const src = String(html ?? "");
+  if (!src || src.includes(THEME_BRIDGE_ID)) return src;
+  const tag = external ? `<script id="${THEME_BRIDGE_ID}" data-wt-theme-bridge src="${THEME_JS_PATH}"></script>` : `<script id="${THEME_BRIDGE_ID}" data-wt-theme-bridge>${THEME_BRIDGE_JS}</script>`;
+  const head = /<\/head\s*>/i.exec(src);
+  if (head) return src.slice(0, head.index) + tag + src.slice(head.index);
+  const body = /<\/body\s*>/i.exec(src);
+  if (body) return src.slice(0, body.index) + tag + src.slice(body.index);
+  return tag + src;
+}
+
 // template/dshell.css
 var dshell_default = `/* dsh-worktable \u539F\u751F\u76AE\u80A4 \xB7 DSH \u8BBE\u8BA1\u7CFB\u7EDF\u7EC4\u4EF6\u5E93
    \u7528\u6CD5\uFF1A<link rel="stylesheet" href="/api/worktable/template/dshell.css">
-   \u6240\u6709\u989C\u8272\u8D70 DSH \u4E3B\u9898\u53D8\u91CF\uFF08--dsw-alias-*\uFF09\uFF0C\u81EA\u52A8\u9002\u914D\u660E\u6697\u4E3B\u9898\u3002 */
-:root { color-scheme: dark; }
+   \u989C\u8272\u4E00\u5F8B\u8D70 DSH \u4E3B\u9898\u53D8\u91CF\uFF08--dsw-alias-*\uFF09\uFF0C\u81EA\u52A8\u9002\u914D\u660E\u6697\u4E3B\u9898\u3002
+   \u4E3B\u9898\u6765\u6E90\u4F18\u5148\u7EA7\uFF1A
+     1) \u5DE5\u4F5C\u53F0\u5185\uFF1A\u4E3B\u9898\u6865\uFF08\u7AD9\u70B9\u8DEF\u7531\u81EA\u52A8\u6CE8\u5165\uFF0C\u6216\u663E\u5F0F\u5F15 /api/worktable/template/theme.js\uFF09
+        \u628A\u5BBF\u4E3B body \u4E0A\u7684 --dsw-*/--dsh-*/--ds-* \u955C\u50CF\u6210\u9875\u9762\u5185\u8054\u6837\u5F0F \u2192 \u8DDF\u968F DSH \u7684 \u6D45\u8272/\u6DF1\u8272/\u8DDF\u968F\u7CFB\u7EDF\uFF1B
+     2) \u72EC\u7ACB\u6253\u5F00\uFF1A\u7528\u4E0B\u9762 :root \u7684\u515C\u5E95\uFF0C\u5E76\u6309\u7CFB\u7EDF\u6DF1\u6D45\u8272\u5207\u6362\u3002
+   \u6CE8\u610F\uFF1A\u4E0D\u8981\u5728\u8FD9\u91CC\u5199\u6B7B\u6DF1\u8272\uFF08\u65E7\u7248 :root{color-scheme:dark} \u4F1A\u8BA9\u6240\u6709\u9875\u9762\u9501\u6B7B\u6DF1\u8272\uFF0C
+   2026-11 \u4ECE 0.5.x \u7EBF\u6062\u590D\u65F6\u518D\u6B21\u8E29\u5230\uFF0CREQ-20261117-0013 \u4E00\u5E76\u4FEE\u6389\uFF09\u3002 */
+:root {
+  color-scheme: light dark;
+  --dsw-alias-bg-base: #ffffff;
+  --dsw-alias-fill-l1: rgba(16, 24, 40, .03);
+  --dsw-alias-border-l1: #e4e7ec;
+  --dsw-alias-border-l2: #d0d5dd;
+  --dsw-alias-label-primary: #101828;
+  --dsw-alias-label-secondary: #475467;
+  --dsw-alias-label-tertiary: #98a2b3;
+  --dsw-alias-state-accent-primary: #2f6feb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --dsw-alias-bg-base: #0b0e14;
+    --dsw-alias-fill-l1: rgba(255, 255, 255, .02);
+    --dsw-alias-border-l1: #262b36;
+    --dsw-alias-border-l2: #3a4150;
+    --dsw-alias-label-primary: #e6e8eb;
+    --dsw-alias-label-secondary: #9aa4b2;
+    --dsw-alias-label-tertiary: #6b7280;
+    --dsw-alias-state-accent-primary: #4f8ef7;
+  }
+}
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--dsw-alias-bg-base, #0b0e14);
   color: var(--dsw-alias-label-primary, #e6e8eb);
-  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-family: var(--dsw-font-family, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -85,7 +352,7 @@ body {
 `;
 
 // template/dshell.html
-var dshell_default2 = '<!doctype html>\n<!-- dsh-worktable \u539F\u751F\u76AE\u80A4\u6A21\u677F\uFF1A\u65B0\u9875\u9762\u4EE5\u6B64\u4E3A\u57FA\u7840\uFF0C\u66FF\u6362\u4E0B\u9762\u793A\u4F8B\u5185\u5BB9\u5373\u53EF\u3002\n     \u6837\u5F0F\u8868\u7531\u63D2\u4EF6\u63D0\u4F9B\uFF08\u968F\u4E3B\u9898\u81EA\u52A8\u9002\u914D\uFF09\uFF0C\u4E0D\u8981\u590D\u5236\u6216\u6539\u5199\u5B83\u3002 -->\n<html lang="zh-CN">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>\u6211\u7684\u7A97\u53E3</title>\n  <link rel="stylesheet" href="/api/worktable/template/dshell.css" />\n</head>\n<body>\n  <div class="dshell">\n    <!-- \u6807\u9898\u533A -->\n    <h1 class="dshell-title">\u7A97\u53E3\u6807\u9898</h1>\n    <p class="dshell-sub">\u4E00\u53E5\u8BDD\u8BF4\u660E\u8FD9\u4E2A\u7A97\u53E3\u505A\u4EC0\u4E48\u3002</p>\n\n    <!-- \u72B6\u6001\u5FBD\u6807\uFF1A\u5DF2\u5B8C\u6210 dshell-badgeDone / \u8FDB\u884C\u4E2D dshell-badgeWait / \u9ED8\u8BA4 -->\n    <div>\n      <span class="dshell-badge dshell-badgeDone">\u5DF2\u5B8C\u6210</span>\n      <span class="dshell-badge dshell-badgeWait">\u8FDB\u884C\u4E2D</span>\n      <span class="dshell-badge">\u672A\u5F00\u59CB</span>\n    </div>\n\n    <!-- \u6807\u7B7E\u9875 -->\n    <div class="dshell-tabs">\n      <button class="dshell-tab dshell-tabOn">\u6982\u89C8</button>\n      <button class="dshell-tab">\u8BE6\u60C5</button>\n      <button class="dshell-tab">\u8BBE\u7F6E</button>\n    </div>\n\n    <!-- \u7EDF\u8BA1\u5361\u7247\u7F51\u683C -->\n    <div class="dshell-grid">\n      <div class="dshell-stat">\n        <div class="dshell-statLabel">\u603B\u6570</div>\n        <div class="dshell-statValue">128</div>\n        <div class="dshell-statDelta">+12.4%</div>\n      </div>\n      <div class="dshell-stat">\n        <div class="dshell-statLabel">\u8FDB\u884C\u4E2D</div>\n        <div class="dshell-statValue">7</div>\n      </div>\n      <div class="dshell-stat">\n        <div class="dshell-statLabel">\u5DF2\u5B8C\u6210</div>\n        <div class="dshell-statValue">121</div>\n      </div>\n    </div>\n\n    <!-- \u5217\u8868 -->\n    <div class="dshell-list">\n      <div class="dshell-listItem">\n        <span class="dshell-listItemTitle">\u6761\u76EE\u4E00\uFF1A\u793A\u4F8B\u5185\u5BB9\u6807\u9898</span>\n        <span class="dshell-listItemMeta">\u6628\u5929</span>\n      </div>\n      <div class="dshell-listItem">\n        <span class="dshell-listItemTitle">\u6761\u76EE\u4E8C\uFF1A\u793A\u4F8B\u5185\u5BB9\u6807\u9898</span>\n        <span class="dshell-badge dshell-badgeDone">\u5DF2\u53D1\u5E03</span>\n      </div>\n    </div>\n\n    <!-- \u5361\u7247 + \u952E\u503C\u5BF9 -->\n    <div class="dshell-card">\n      <h2 class="dshell-sub" style="margin:0 0 8px">\u8BE6\u60C5</h2>\n      <div class="dshell-kv">\n        <div class="dshell-kvRow"><span class="dshell-kvKey">\u5B57\u6BB5 A</span><span class="dshell-kvValue">\u503C A</span></div>\n        <div class="dshell-kvRow"><span class="dshell-kvKey">\u5B57\u6BB5 B</span><span class="dshell-kvValue">\u503C B</span></div>\n      </div>\n      <div class="dshell-divider"></div>\n      <div class="dshell-progress"><div class="dshell-progressBar" style="width:72%"></div></div>\n    </div>\n\n    <!-- \u64CD\u4F5C\u533A -->\n    <div style="display:flex;gap:8px">\n      <button class="dshell-btn">\u4E3B\u8981\u64CD\u4F5C</button>\n      <button class="dshell-btn dshell-btnGhost">\u6B21\u8981\u64CD\u4F5C</button>\n    </div>\n  </div>\n</body>\n</html>\n';
+var dshell_default2 = '<!doctype html>\n<!-- dsh-worktable \u539F\u751F\u76AE\u80A4\u6A21\u677F\uFF1A\u65B0\u9875\u9762\u4EE5\u6B64\u4E3A\u57FA\u7840\uFF0C\u66FF\u6362\u4E0B\u9762\u793A\u4F8B\u5185\u5BB9\u5373\u53EF\u3002\n     \u6837\u5F0F\u8868\u7531\u63D2\u4EF6\u63D0\u4F9B\uFF08\u968F\u4E3B\u9898\u81EA\u52A8\u9002\u914D\uFF09\uFF0C\u4E0D\u8981\u590D\u5236\u6216\u6539\u5199\u5B83\u3002 -->\n<html lang="zh-CN">\n<head>\n  <!-- \u4E3B\u9898\u8DDF\u968F\uFF1A\u7AD9\u70B9\u8DEF\u7531\uFF08/api/worktable/site/**\uFF09\u5DF2\u81EA\u52A8\u6CE8\u5165\u4E3B\u9898\u6865\uFF0C\u65E0\u9700\u624B\u5199\uFF1B\n       \u72EC\u7ACB\u6253\u5F00 / \u5D4C\u5957 iframe \u65F6\u663E\u5F0F\u5F15\u5165\u4E0B\u9762\u8FD9\u4E00\u884C\u5373\u53EF\uFF1A\n       <script src="/api/worktable/template/theme.js"></script> -->\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>\u6211\u7684\u7A97\u53E3</title>\n  <link rel="stylesheet" href="/api/worktable/template/dshell.css" />\n</head>\n<body>\n  <div class="dshell">\n    <!-- \u6807\u9898\u533A -->\n    <h1 class="dshell-title">\u7A97\u53E3\u6807\u9898</h1>\n    <p class="dshell-sub">\u4E00\u53E5\u8BDD\u8BF4\u660E\u8FD9\u4E2A\u7A97\u53E3\u505A\u4EC0\u4E48\u3002</p>\n\n    <!-- \u72B6\u6001\u5FBD\u6807\uFF1A\u5DF2\u5B8C\u6210 dshell-badgeDone / \u8FDB\u884C\u4E2D dshell-badgeWait / \u9ED8\u8BA4 -->\n    <div>\n      <span class="dshell-badge dshell-badgeDone">\u5DF2\u5B8C\u6210</span>\n      <span class="dshell-badge dshell-badgeWait">\u8FDB\u884C\u4E2D</span>\n      <span class="dshell-badge">\u672A\u5F00\u59CB</span>\n    </div>\n\n    <!-- \u6807\u7B7E\u9875 -->\n    <div class="dshell-tabs">\n      <button class="dshell-tab dshell-tabOn">\u6982\u89C8</button>\n      <button class="dshell-tab">\u8BE6\u60C5</button>\n      <button class="dshell-tab">\u8BBE\u7F6E</button>\n    </div>\n\n    <!-- \u7EDF\u8BA1\u5361\u7247\u7F51\u683C -->\n    <div class="dshell-grid">\n      <div class="dshell-stat">\n        <div class="dshell-statLabel">\u603B\u6570</div>\n        <div class="dshell-statValue">128</div>\n        <div class="dshell-statDelta">+12.4%</div>\n      </div>\n      <div class="dshell-stat">\n        <div class="dshell-statLabel">\u8FDB\u884C\u4E2D</div>\n        <div class="dshell-statValue">7</div>\n      </div>\n      <div class="dshell-stat">\n        <div class="dshell-statLabel">\u5DF2\u5B8C\u6210</div>\n        <div class="dshell-statValue">121</div>\n      </div>\n    </div>\n\n    <!-- \u5217\u8868 -->\n    <div class="dshell-list">\n      <div class="dshell-listItem">\n        <span class="dshell-listItemTitle">\u6761\u76EE\u4E00\uFF1A\u793A\u4F8B\u5185\u5BB9\u6807\u9898</span>\n        <span class="dshell-listItemMeta">\u6628\u5929</span>\n      </div>\n      <div class="dshell-listItem">\n        <span class="dshell-listItemTitle">\u6761\u76EE\u4E8C\uFF1A\u793A\u4F8B\u5185\u5BB9\u6807\u9898</span>\n        <span class="dshell-badge dshell-badgeDone">\u5DF2\u53D1\u5E03</span>\n      </div>\n    </div>\n\n    <!-- \u5361\u7247 + \u952E\u503C\u5BF9 -->\n    <div class="dshell-card">\n      <h2 class="dshell-sub" style="margin:0 0 8px">\u8BE6\u60C5</h2>\n      <div class="dshell-kv">\n        <div class="dshell-kvRow"><span class="dshell-kvKey">\u5B57\u6BB5 A</span><span class="dshell-kvValue">\u503C A</span></div>\n        <div class="dshell-kvRow"><span class="dshell-kvKey">\u5B57\u6BB5 B</span><span class="dshell-kvValue">\u503C B</span></div>\n      </div>\n      <div class="dshell-divider"></div>\n      <div class="dshell-progress"><div class="dshell-progressBar" style="width:72%"></div></div>\n    </div>\n\n    <!-- \u64CD\u4F5C\u533A -->\n    <div style="display:flex;gap:8px">\n      <button class="dshell-btn">\u4E3B\u8981\u64CD\u4F5C</button>\n      <button class="dshell-btn dshell-btnGhost">\u6B21\u8981\u64CD\u4F5C</button>\n    </div>\n  </div>\n</body>\n</html>\n';
 
 // src/index.ts
 function baseDshHome() {
@@ -115,7 +382,7 @@ function resolveDshHomeSafe() {
   cachedDshHome = baseDshHome();
   return cachedDshHome;
 }
-var PLUGIN_VERSION = false ? "dev" : "0.4.8";
+var PLUGIN_VERSION = false ? "dev" : "0.5.3-local.5";
 var name = "dsh-worktable";
 var inject = ["webServer", "sessions"];
 var HEALTH_PATH = "/api/worktable/health";
@@ -210,363 +477,16 @@ function json(res, status, body) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(body));
 }
-function authRejectCode(ctx, req) {
-  let conn = null;
-  try {
-    conn = ctx.get?.("connection") ?? null;
-  } catch {
-    conn = null;
-  }
-  if (!conn || typeof conn.requestRejection !== "function") {
-    ctx.logger?.warn?.("[dsh-worktable] connection \u670D\u52A1\u4E0D\u53EF\u7528 \u2192 fail-closed\uFF08\u62D2\u7EDD\u8BE5\u8BF7\u6C42\uFF09");
-    return 403;
-  }
-  try {
-    return conn.requestRejection(req);
-  } catch {
-    return 403;
-  }
-}
-function denyRequest(res, code) {
-  res.writeHead(code, { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" });
-  res.end(code === 401 ? "dsh web authentication required; reopen the URL printed by dsh web.\n" : "dsh-worktable: forbidden\n");
-}
-function guarded(ctx, handler) {
-  return (req, res) => {
-    const code = authRejectCode(ctx, req);
-    if (code !== void 0) {
-      denyRequest(res, code);
-      return;
-    }
-    return handler(req, res);
-  };
-}
-function parseLegacyMatch(name2) {
-  return typeof name2 === "string" && name2.includes("dsh-client-ui-voice");
-}
-function textMentionsLegacy(text) {
-  return typeof text === "string" && text.includes("dsh-client-ui-voice");
-}
-function stripYamlLineComment(line) {
-  let quote = "";
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (quote) {
-      if (quote === '"' && c === "\\") {
-        i++;
-        continue;
-      }
-      if (c === quote) {
-        if (quote === "'" && line[i + 1] === "'") {
-          i++;
-          continue;
-        }
-        quote = "";
-      }
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      quote = c;
-      continue;
-    }
-    if (c === "#" && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
-  }
-  return line;
-}
-function textMentionsLegacyEntry(text) {
-  if (typeof text !== "string") return false;
-  const entryText = text.split("\n").map(stripYamlLineComment).join("\n");
-  return textMentionsLegacy(entryText);
-}
-function detectLegacyLoaded(entries) {
-  try {
-    for (const entry of entries) if (parseLegacyMatch(entry?.options?.name)) return true;
-  } catch {
-  }
-  return false;
-}
-var VOICE_CHECK_FIELDS = ["time", "patchHasLegacy", "catalogHasLegacy", "legacyLoaded", "catalogChecked", "conclusion"];
-var VOICE_CHECK_CONCLUSIONS = ["legacy-loaded", "legacy-present", "clean", "catalog-unchecked"];
-function buildCheckPayload(input) {
-  const patchHasLegacy = input.patchHasLegacy === true;
-  const catalogHasLegacy = input.catalogHasLegacy === true;
-  const legacyLoaded = input.legacyLoaded === true;
-  const catalogChecked = input.catalogChecked === true;
-  const conclusion = legacyLoaded ? "legacy-loaded" : patchHasLegacy || catalogHasLegacy ? "legacy-present" : catalogChecked ? "clean" : "catalog-unchecked";
-  return {
-    time: typeof input.time === "string" && input.time ? input.time : (/* @__PURE__ */ new Date()).toISOString(),
-    patchHasLegacy,
-    catalogHasLegacy,
-    legacyLoaded,
-    catalogChecked,
-    conclusion
-  };
-}
-function pickVoiceCheckFields(doc) {
-  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
-  return buildCheckPayload({
-    time: typeof doc.time === "string" ? doc.time : "",
-    patchHasLegacy: doc.patchHasLegacy,
-    catalogHasLegacy: doc.catalogHasLegacy,
-    legacyLoaded: doc.legacyLoaded,
-    catalogChecked: doc.catalogChecked
-  });
-}
-var LEGACY_VOICE_WARNING = "[dsh-worktable] \u26A0\uFE0F \u68C0\u6D4B\u5230\u65E7\u8BED\u97F3\u63D2\u4EF6 @deepseek-ai/dsh-client-ui-voice \u7684\u56DE\u6D41\u4FE1\u53F7\uFF1A\u2460 \u88C5\u56DE\u4F1A\u4E0E\u672C\u5730\u6865 /api/voice/asr \u9759\u9ED8\u906E\u853D\uFF08exact \u4F18\u5148\u4E8E /api \u524D\u7F00\uFF0C\u7528\u6237\u65E0\u611F\u77E5\uFF09\uFF1B\u2461 \u5B83\u7684 ASR/TTS \u8D70\u4E91\uFF08\u8C46\u5305 ASR volc.bigasr.auc_turbo + \u8C46\u5305 TTS + ark\uFF09\u2192 \u9759\u9ED8\u8BA1\u8D39\uFF1B\u2462 \u4E3B\u8DEF\u5F84\uFF08\u8F93\u5165\u6846\u9EA6\u514B\u98CE + \u5DE5\u4F5C\u53F0\uFF09\u5DF2\u8986\u76D6\u9700\u6C42\uFF0C\u52FF\u88C5\u56DE\u3002";
-function catalogCandidates(env, execPath) {
-  const out = [];
-  const root = typeof env?.DSH_HOST_BUNDLED_PLUGINS_ROOT === "string" ? env.DSH_HOST_BUNDLED_PLUGINS_ROOT.trim() : "";
-  if (root) out.push(pathResolve(root, "catalog.v1.json"));
-  if (typeof execPath === "string" && execPath) out.push(pathResolve(dirname(execPath), "..", "dsh-default-plugins", "catalog.v1.json"));
-  out.push("/Applications/Slark.app/Contents/Resources/dsh-default-plugins/catalog.v1.json");
-  return Array.from(new Set(out));
-}
-function firstReadable(candidates, read) {
-  for (const file of candidates) {
-    try {
-      return read(file);
-    } catch {
-    }
-  }
-  return null;
-}
-var VOICE_CONFIG_ERRORS = ["bad-json", "not-object", "not-boolean", "read-failed"];
-function parseVoiceConfig(raw) {
-  if (typeof raw !== "string") return { voiceAsrEnabled: true };
-  let doc;
-  try {
-    doc = JSON.parse(raw);
-  } catch {
-    return { voiceAsrEnabled: true, invalid: true, error: "bad-json" };
-  }
-  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return { voiceAsrEnabled: true, invalid: true, error: "not-object" };
-  if (typeof doc.voiceAsrEnabled !== "boolean") return { voiceAsrEnabled: true, invalid: true, error: "not-boolean" };
-  return { voiceAsrEnabled: doc.voiceAsrEnabled };
-}
-function loadVoiceConfig() {
-  const file = pathResolve(resolveDshHomeSafe(), "worktable-voice.json");
-  let raw;
-  try {
-    raw = readFileSync(file, "utf8");
-  } catch {
-    if (existsSync(file)) {
-      return { voiceAsrEnabled: true, exists: true, source: "default", invalid: true, error: "read-failed" };
-    }
-    return { voiceAsrEnabled: true, exists: false, source: "default" };
-  }
-  const parsed = parseVoiceConfig(raw);
-  if (parsed.invalid) return { voiceAsrEnabled: parsed.voiceAsrEnabled, exists: true, source: "default", invalid: true, error: parsed.error };
-  return { voiceAsrEnabled: parsed.voiceAsrEnabled, exists: true, source: "file" };
-}
-function voiceConfigInvalidWarning(error) {
-  return "[dsh-worktable] \u26A0\uFE0F \u8BED\u97F3\u5F00\u5173\u914D\u7F6E\u65E0\u6548\uFF08$DSH_HOME/worktable-voice.json\uFF1A" + error + "\uFF09\u2192 voiceAsrEnabled \u5DF2\u6309\u9ED8\u8BA4 true \u751F\u6548\uFF1B\u8BF7\u4FEE\u6B63\u8BE5\u6587\u4EF6\uFF08\u6216\u5220\u6389\u5B83\u8D70\u9ED8\u8BA4\uFF09";
-}
-var VOICE_ASR_MAX_BYTES = 4 * 1024 * 1024;
-var VOICE_ASR_RESPONSE_DEADLINE_MS = 18e3;
-var VOICE_ASR_PROVIDER_TIMEOUT_MS = 6e4;
-var VOICE_ASR_MAX_INFLIGHT = 2;
-var VOICE_ASR_MAX_PER_MINUTE = 30;
-var READ_JSON_MAX_BYTES = 32 * 1024 * 1024;
-var VOICE_ASR_REASONS = ["disabled", "rejected", "unavailable", "failed", "timeout", "busy", "rate-limited"];
-function checkVoiceWaveBounds(bytes, maxBytes = VOICE_ASR_MAX_BYTES) {
-  const n = bytes?.byteLength;
-  return typeof n === "number" && Number.isFinite(n) && n > 44 && n <= maxBytes;
-}
-function voiceAsrLogLine(reason) {
-  return "[dsh-worktable] /api/voice/asr \u672C\u5730\u8F6C\u5199\u6865\uFF1A" + reason + "\uFF08\u8FD4\u56DE\u7A7A\u6587\u672C\uFF1B\u97F3\u9891\u4E0D\u843D\u76D8\uFF09";
-}
-async function readBodyLimited(req, maxBytes) {
-  const declared = Number(req?.headers?.["content-length"]);
-  if (Number.isFinite(declared) && declared > maxBytes) return { ok: false, reason: "too-large" };
+async function readJsonBody(req) {
   const chunks = [];
-  let total = 0;
-  try {
-    for await (const chunk of req) {
-      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-      total += buf.length;
-      if (total > maxBytes) {
-        try {
-          req?.destroy?.();
-        } catch {
-        }
-        return { ok: false, reason: "too-large" };
-      }
-      chunks.push(buf);
-    }
-  } catch {
-    try {
-      req?.destroy?.();
-    } catch {
-    }
-    return { ok: false, reason: "too-large" };
+  let bytes = 0;
+  for await (const chunk of req) {
+    const data = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    bytes += data.length;
+    if (bytes > 22 * 1024 * 1024) throw Object.assign(new Error("request too large"), { status: 413 });
+    chunks.push(data);
   }
-  return { ok: true, bytes: Buffer.concat(chunks) };
-}
-async function readRawBody(req, maxBytes = VOICE_ASR_MAX_BYTES) {
-  const read = await readBodyLimited(req, maxBytes);
-  return read.ok ? read.bytes : null;
-}
-var fileQueues = /* @__PURE__ */ new Map();
-function withFileLock(file, task) {
-  const prev = fileQueues.get(file) ?? Promise.resolve();
-  const run = prev.then(task, task);
-  fileQueues.set(file, run.then(() => void 0, () => void 0));
-  return run;
-}
-async function writeFileAtomic(file, data, mode) {
-  const fsx = await import("node:fs/promises");
-  const tmp = pathResolve(dirname(file), "." + basename(file) + "." + process.pid + "." + Date.now().toString(36) + "." + Math.random().toString(36).slice(2, 8) + ".tmp");
-  await fsx.writeFile(tmp, data, { encoding: "utf8", mode });
-  try {
-    await fsx.rename(tmp, file);
-  } catch (err) {
-    try {
-      await fsx.unlink(tmp);
-    } catch {
-    }
-    throw err;
-  }
-}
-function normalizeDraftTake(value) {
-  return Math.max(0, Math.min(1e3, Math.floor(Number(value) || 0)));
-}
-function voiceCheckLogPath() {
-  return pathResolve(resolveDshHomeSafe(), "logs", "dsh-worktable-check.json");
-}
-function currentProfileName() {
-  const p = process.env.DSH_PROFILE;
-  return typeof p === "string" && p.trim() ? p.trim() : "web";
-}
-function patchCandidates(env, home, profile) {
-  const explicit = typeof env?.DSH_PROFILE_DIR === "string" ? env.DSH_PROFILE_DIR.trim() : "";
-  const out = [];
-  if (explicit) out.push(pathResolve(explicit, "cordis.patch.yml"));
-  out.push(pathResolve(home, "profiles", profile, "cordis.patch.yml"));
-  return Array.from(new Set(out));
-}
-var lastVoiceCheckPayload = null;
-function collectVoiceCheck(ctx, time) {
-  const read = (p) => readFileSync(p, "utf8");
-  let catalogText = null;
-  let patchText = null;
-  try {
-    catalogText = firstReadable(catalogCandidates(process.env, process.execPath), read);
-  } catch {
-    catalogText = null;
-  }
-  try {
-    patchText = firstReadable(patchCandidates(process.env, resolveDshHomeSafe(), currentProfileName()), read);
-  } catch {
-    patchText = null;
-  }
-  let loaded = false;
-  try {
-    const loader = ctx?.get?.("loader") ?? null;
-    if (loader && typeof loader.entries === "function") loaded = detectLegacyLoaded(loader.entries());
-  } catch {
-    loaded = false;
-  }
-  return buildCheckPayload({
-    time,
-    patchHasLegacy: textMentionsLegacyEntry(patchText),
-    // 只认非注释条目（注释提及不算命中）
-    catalogHasLegacy: textMentionsLegacy(catalogText),
-    catalogChecked: typeof catalogText === "string",
-    // 目录/文件不存在 → false（静默降级）
-    legacyLoaded: loaded
-  });
-}
-function scheduleVoiceCheck(ctx) {
-  const time = (/* @__PURE__ */ new Date()).toISOString();
-  let warned = false;
-  const run = () => {
-    void (async () => {
-      try {
-        const payload = collectVoiceCheck(ctx, time);
-        lastVoiceCheckPayload = payload;
-        try {
-          const file = voiceCheckLogPath();
-          await mkdir(dirname(file), { recursive: true });
-          await writeFile(file, JSON.stringify(payload, null, 2) + "\n", "utf8");
-        } catch {
-        }
-        if (!warned && (payload.legacyLoaded || payload.catalogHasLegacy || payload.patchHasLegacy)) {
-          warned = true;
-          try {
-            ctx.logger?.warn?.(LEGACY_VOICE_WARNING);
-          } catch {
-          }
-        }
-      } catch {
-      }
-    })();
-  };
-  try {
-    setTimeout(run, 0);
-    setTimeout(run, 1500);
-  } catch {
-  }
-}
-var SENSITIVE_SEGMENTS = [".ssh", ".aws", ".gnupg", ".netrc", ".git-credentials", "keychains", ".config/gh"];
-var writableRoots = [];
-function rootsFilePath() {
-  return pathResolve(resolveDshHomeSafe(), "worktable-roots.json");
-}
-function loadWritableRoots() {
-  try {
-    const d = JSON.parse(readFileSync(rootsFilePath(), "utf8"));
-    if (Array.isArray(d?.folders)) {
-      writableRoots = d.folders.filter((x) => typeof x === "string" && x.length > 0);
-    }
-  } catch {
-  }
-}
-function __wtSetWritableRootsForTest(roots) {
-  writableRoots = roots.filter((x) => typeof x === "string" && x.length > 0);
-}
-function saveWritableRoots() {
-  try {
-    writeFileSync(rootsFilePath(), JSON.stringify({ folders: writableRoots }, null, 1));
-  } catch {
-  }
-}
-function isSensitivePath(abs) {
-  const p = abs.replace(/\\/g, "/");
-  return SENSITIVE_SEGMENTS.some((seg) => p.includes("/" + seg + "/") || p.endsWith("/" + seg));
-}
-function realAncestor(abs) {
-  let cur = abs;
-  for (let i = 0; i < 64; i++) {
-    try {
-      return realpathSync(cur);
-    } catch {
-    }
-    const up = pathResolve(cur, "..");
-    if (up === cur) return cur;
-    cur = up;
-  }
-  return abs;
-}
-function writeRejectFor(abs, cloudStateAbs) {
-  if (cloudStateAbs && pathResolve(cloudStateAbs) === abs) {
-    return isSensitivePath(abs) ? "sensitive path" : void 0;
-  }
-  return writePathReject(abs);
-}
-function writePathReject(abs) {
-  if (isSensitivePath(abs)) return "sensitive path";
-  if (writableRoots.length === 0) return void 0;
-  const real = realAncestor(abs);
-  const inside = writableRoots.some((r) => {
-    const rr = realAncestor(pathResolve(r));
-    return real === rr || real.startsWith(rr.endsWith("/") ? rr : rr + "/");
-  });
-  return inside ? void 0 : "outside project folders";
-}
-async function readJsonBody(req, maxBytes = READ_JSON_MAX_BYTES) {
-  const read = await readBodyLimited(req, maxBytes);
-  if (!read.ok) return {};
-  const text = read.bytes.toString("utf8");
+  const text = Buffer.concat(chunks).toString("utf8");
   if (!text) return {};
   try {
     return JSON.parse(text);
@@ -577,7 +497,7 @@ async function readJsonBody(req, maxBytes = READ_JSON_MAX_BYTES) {
 async function listDirectory(path) {
   const abs = pathResolve(path);
   const dirents = await readdir(abs, { withFileTypes: true });
-  const entries = dirents.map((d) => ({ name: d.name, path: abs + sep + d.name, isDir: d.isDirectory(), hidden: d.name.startsWith(".") })).sort((a, b) => {
+  const entries = dirents.map((d) => ({ name: d.name, path: abs + sep2 + d.name, isDir: d.isDirectory(), hidden: d.name.startsWith(".") })).sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     return a.name.localeCompare(b.name, void 0, { sensitivity: "base" });
   });
@@ -615,21 +535,41 @@ function setupTerminal(webServer, ctx) {
   if (!WebSocketServer) return;
   const pty = ptyMod.default ?? ptyMod;
   const wss = new WebSocketServer({ noServer: true });
+  let disposed = false;
+  const terminals = /* @__PURE__ */ new Set();
+  ctx.effect(() => () => {
+    disposed = true;
+    for (const ws of wss.clients ?? []) {
+      try {
+        ws.terminate();
+      } catch {
+      }
+    }
+    for (const term of terminals) {
+      try {
+        term.kill();
+      } catch {
+      }
+    }
+    terminals.clear();
+    try {
+      wss.close();
+    } catch {
+    }
+  }, "dsh-worktable: terminal sessions");
   const spawnShell = () => process.platform === "win32" ? { cmd: "powershell.exe", args: ["-NoLogo", "-NoProfile"] } : { cmd: process.env.SHELL || "/bin/bash", args: [] };
   const clampDim = (v, fallback) => Math.min(1024, Math.max(2, Number.isFinite(v) ? v : fallback));
   ctx.effect(() => webServer.registerUpgrade({
     path: "/api/worktable/term",
-    handler: (req, socket, head) => {
-      const reject = authRejectCode(ctx, req);
-      if (reject !== void 0) {
-        try {
-          socket.write("HTTP/1.1 " + reject + (reject === 401 ? " Unauthorized" : " Forbidden") + "\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
-        } catch {
-        }
-        try {
-          socket.destroy();
-        } catch {
-        }
+    handler: async (req, socket, head) => {
+      let rejected = await requestRejection(ctx, req);
+      if (disposed) rejected = 503;
+      if (rejected !== void 0) {
+        socket.end(`HTTP/1.1 ${rejected} ${rejectionText(rejected)}\r
+Connection: close\r
+Content-Length: 0\r
+\r
+`);
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
@@ -641,6 +581,7 @@ function setupTerminal(webServer, ctx) {
         try {
           const shell = spawnShell();
           term = pty.spawn(shell.cmd, shell.args, { name: "xterm-256color", cols, rows, cwd, env: process.env });
+          terminals.add(term);
         } catch (err) {
           try {
             ws.send("\r\n[worktable] \u7EC8\u7AEF\u542F\u52A8\u5931\u8D25\uFF1A" + String(err));
@@ -659,6 +600,7 @@ function setupTerminal(webServer, ctx) {
           }
         });
         term.onExit(() => {
+          terminals.delete(term);
           try {
             ws.close();
           } catch {
@@ -680,6 +622,7 @@ function setupTerminal(webServer, ctx) {
           }
         });
         ws.on("close", () => {
+          terminals.delete(term);
           try {
             term.kill();
           } catch {
@@ -689,70 +632,100 @@ function setupTerminal(webServer, ctx) {
     }
   }), "dsh-worktable: terminal upgrade");
 }
-function localConfigPaths(fileName) {
-  const libDir = dirname(fileURLToPath(import.meta.url));
-  const out = [];
-  const envDir = process.env.DSH_WORKTABLE_LOCAL_DIR;
-  if (typeof envDir === "string" && envDir.trim()) out.push(pathResolve(envDir.trim(), fileName));
-  out.push(pathResolve(libDir, "..", "03_local", fileName));
-  out.push(pathResolve(libDir, "..", "..", "03_local", fileName));
-  out.push(pathResolve(libDir, "..", "..", "..", "03_local", fileName));
-  try {
-    const home = resolveDshHomeSafe();
-    if (typeof home === "string" && home) out.push(pathResolve(home, "03_local", fileName));
-  } catch {
-  }
-  return out;
-}
-async function readLocalConfigField(fileName, field) {
-  for (const file of localConfigPaths(fileName)) {
-    try {
-      const raw = await readFile(file, "utf8");
-      const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
-      const value = parsed && typeof parsed === "object" ? parsed[field] : void 0;
-      const text = typeof value === "string" ? value.trim() : "";
-      if (text) return text;
-    } catch {
-    }
-  }
-  return null;
-}
-function apply(ctx, voiceLimitOverrides) {
+function apply(ctx) {
   const webServer = ctx.webServer;
   if (!webServer) {
     ctx.logger?.warn("[dsh-worktable] ctx.webServer \u4E0D\u53EF\u7528\uFF08headless profile\uFF1F\uFF09\uFF0C\u8DF3\u8FC7\u670D\u52A1\u7AEF\u8DEF\u7531");
     return;
   }
-  const registerRoute = webServer.register.bind(webServer);
-  const register = (route) => registerRoute({ ...route, handler: guarded(ctx, route.handler) });
-  loadWritableRoots();
+  const previews = createPreviewFiles();
+  ctx.effect(() => () => previews.clear(), "dsh-worktable: preview capabilities");
+  const stateLog = (line) => {
+    void (async () => {
+      try {
+        const fsx = await import("node:fs/promises");
+        const dir = pathResolve(resolveDshHomeSafe(), "logs");
+        await fsx.mkdir(dir, { recursive: true });
+        await fsx.appendFile(pathResolve(dir, "worktable-state.log"), (/* @__PURE__ */ new Date()).toISOString() + " " + line + "\n", "utf8");
+      } catch {
+      }
+    })();
+  };
+  const register = (route, publicAsset = false) => ctx.effect(() => webServer.register({
+    ...route,
+    handler: async (req, res) => {
+      if (!publicAsset && route.path !== HEALTH_PATH) {
+        const rejected = await requestRejection(ctx, req);
+        if (rejected !== void 0) {
+          if (route.path === "/api/worktable/state") stateLog("REJECT " + req.method + " -> " + rejected);
+          json(res, rejected, { error: rejectionText(rejected) });
+          return;
+        }
+      }
+      return route.handler(req, res);
+    }
+  }), "dsh-worktable: " + route.path);
+  register({
+    kind: "exact",
+    path: "/api/worktable/preview",
+    handler: async (req, res) => {
+      if (req.method !== "POST") {
+        json(res, 405, { error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        if (typeof body.revoke === "string") {
+          previews.revoke(body.revoke);
+          json(res, 200, { ok: true });
+          return;
+        }
+        if (typeof body.root !== "string") {
+          json(res, 400, { error: "missing root" });
+          return;
+        }
+        const token = await previews.mount(body.root);
+        json(res, 200, { token, base: PREVIEW_PREFIX + "/" + token + "/" });
+      } catch (err) {
+        json(res, err.status ?? 400, { error: String(err) });
+      }
+    }
+  });
+  register({
+    kind: "prefix",
+    path: PREVIEW_PREFIX,
+    handler: async (req, res) => {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        json(res, 405, { error: "method not allowed" });
+        return;
+      }
+      try {
+        const parts = new URL(req.url ?? "/", "http://dsh.internal").pathname.slice(PREVIEW_PREFIX.length + 1).split("/").map(decodeURIComponent);
+        const file = await previews.file(parts.shift() ?? "", parts.filter(Boolean), req.method === "HEAD");
+        if (!file) {
+          json(res, 404, { error: "preview unavailable; refresh to reopen" });
+          return;
+        }
+        const ext = (file.path.split(".").pop() || "").toLowerCase();
+        res.writeHead(200, {
+          "content-type": FILE_TYPES[ext] ?? "application/octet-stream",
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "content-security-policy": PREVIEW_CSP,
+          "x-content-type-options": "nosniff",
+          "access-control-allow-origin": "*"
+        });
+        res.end(file.data);
+      } catch (err) {
+        json(res, err?.status === 413 ? 413 : 404, { error: err?.status === 413 ? "file too large" : "preview unavailable" });
+      }
+    }
+  }, true);
   register({
     kind: "exact",
     path: HEALTH_PATH,
     handler: (_req, res) => {
       json(res, 200, { plugin: "dsh-worktable", version: PLUGIN_VERSION, ok: true });
-    }
-  });
-  register({
-    kind: "exact",
-    path: "/api/worktable/roots",
-    handler: async (req, res) => {
-      try {
-        if (req.method !== "POST") {
-          res.writeHead(405);
-          res.end();
-          return;
-        }
-        const body = await readJsonBody(req);
-        const folders = Array.isArray(body?.folders) ? body.folders.filter((x) => typeof x === "string" && x.length > 0) : [];
-        if (folders.length > 0) {
-          writableRoots = Array.from(/* @__PURE__ */ new Set([...folders.map((f) => pathResolve(f)), ...writableRoots]));
-          saveWritableRoots();
-        }
-        json(res, 200, { ok: true, roots: writableRoots.length });
-      } catch (err) {
-        json(res, 500, { error: String(err) });
-      }
     }
   });
   register({
@@ -767,12 +740,8 @@ function apply(ctx, voiceLimitOverrides) {
           return;
         }
         const abs = pathResolve(p);
-        if (isSensitivePath(abs)) {
-          json(res, 403, { error: "sensitive path" });
-          return;
-        }
-        const stat = await import("node:fs/promises").then((m) => m.stat(abs));
-        if (stat.size > 20 * 1024 * 1024) {
+        const stat2 = await import("node:fs/promises").then((m) => m.stat(abs));
+        if (stat2.size > 20 * 1024 * 1024) {
           json(res, 413, { error: "file too large" });
           return;
         }
@@ -799,7 +768,12 @@ function apply(ctx, voiceLimitOverrides) {
           bmp: "image/bmp",
           ico: "image/x-icon"
         };
-        res.writeHead(200, { "content-type": FILE_TYPES[ext] ?? "application/octet-stream", "cache-control": "no-store" });
+        res.writeHead(200, {
+          "content-type": FILE_TYPES[ext] ?? "application/octet-stream",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          .../^(html?|svg)$/.test(ext) ? { "content-security-policy": PREVIEW_CSP, "referrer-policy": "no-referrer" } : {}
+        });
         res.end(data);
       } catch (err) {
         json(res, 404, { error: String(err) });
@@ -821,6 +795,9 @@ function apply(ctx, voiceLimitOverrides) {
         if (rel === "/dshell.css") {
           res.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
           res.end(dshell_default);
+        } else if (rel === "/theme.js") {
+          res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+          res.end(THEME_BRIDGE_JS);
         } else {
           res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
           res.end(dshell_default2);
@@ -857,12 +834,8 @@ function apply(ctx, voiceLimitOverrides) {
         }
         const root = pathResolve(rootToken);
         let abs = pathResolve(root, rel);
-        if (abs !== root && !abs.startsWith(root + sep)) {
+        if (abs !== root && !abs.startsWith(root + sep2)) {
           json(res, 403, { error: "outside root" });
-          return;
-        }
-        if (isSensitivePath(abs)) {
-          json(res, 403, { error: "sensitive path" });
           return;
         }
         const statMod = await import("node:fs/promises");
@@ -881,8 +854,14 @@ function apply(ctx, voiceLimitOverrides) {
         }
         const data = await readFile(abs);
         const ext = (abs.split(".").pop() || "").toLowerCase();
-        res.writeHead(200, { "content-type": FILE_TYPES[ext] ?? "application/octet-stream", "cache-control": "no-store" });
-        res.end(data);
+        res.writeHead(200, {
+          "content-type": FILE_TYPES[ext] ?? "application/octet-stream",
+          "cache-control": "no-store",
+          "content-security-policy": PREVIEW_CSP,
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff"
+        });
+        res.end(ext === "html" || ext === "htm" ? Buffer.from(injectThemeBridge(data.toString("utf8")), "utf8") : data);
       } catch (err) {
         json(res, 404, { error: String(err) });
       }
@@ -895,288 +874,12 @@ function apply(ctx, voiceLimitOverrides) {
       try {
         const body = await readJsonBody(req);
         const path = typeof body.path === "string" && body.path ? body.path : serverCwd(ctx, body.sessionId, body.cwd);
-        const absFs = pathResolve(path);
-        if (isSensitivePath(absFs)) {
-          json(res, 403, { path: "", entries: [], truncated: false, error: "sensitive path" });
-          return;
-        }
-        json(res, 200, await listDirectory(absFs));
+        json(res, 200, await listDirectory(path));
       } catch (err) {
-        json(res, 500, { path: "", entries: [], truncated: false, error: String(err) });
+        json(res, err.status ?? 500, { path: "", entries: [], truncated: false, error: String(err) });
       }
     }
   });
-  register({
-    kind: "exact",
-    path: "/api/worktable/local-paths",
-    handler: async (_req, res) => {
-      const cloudState = await readLocalConfigField("local.json", "cloudStatePath");
-      json(res, 200, {
-        cloudState,
-        candidates: cloudState ? [] : localConfigPaths("local.json")
-      });
-    }
-  });
-  const USER_MEMORY_FILES = ["speech.json", "facts.json", "procedures.json"];
-  register({
-    kind: "exact",
-    path: "/api/worktable/user-memory",
-    handler: async (req, res) => {
-      try {
-        const u = new URL(req.url ?? "/", "http://dsh.internal");
-        const name2 = u.searchParams.get("name") || "speech.json";
-        if (!USER_MEMORY_FILES.includes(name2)) {
-          json(res, 403, { error: "name not allowed" });
-          return;
-        }
-        const file = pathResolve(resolveDshHomeSafe(), "memory", "user", name2);
-        if (req.method === "GET") {
-          try {
-            const raw = await readFile(file, "utf8");
-            json(res, 200, { name: name2, path: file, exists: true, content: JSON.parse(raw) });
-          } catch (err) {
-            json(res, 200, { name: name2, path: file, exists: false, error: String(err) });
-          }
-          return;
-        }
-        if (req.method === "POST") {
-          const body = await readJsonBody(req);
-          const delta = body && typeof body.corrected === "object" && body.corrected ? body.corrected : null;
-          const learn = body && body.learn && typeof body.learn === "object" ? body.learn : null;
-          const draftTake = normalizeDraftTake(body && body.draftTake);
-          if (!delta && !learn && !draftTake) {
-            json(res, 400, { error: 'expect {corrected:{"<wrong>":<n>}} \u3001 {learn:{wrong,right}} \u6216 {draftTake:1}' });
-            return;
-          }
-          const out = await withFileLock(file, async () => {
-            let doc = null;
-            try {
-              doc = JSON.parse(await readFile(file, "utf8"));
-            } catch {
-            }
-            if (!doc || typeof doc !== "object") return { status: 404, body: { error: "user memory file missing or unreadable" } };
-            doc.stats = doc.stats && typeof doc.stats === "object" ? doc.stats : {};
-            if (draftTake) {
-              doc.stats.draftTakes = Math.floor(Number(doc.stats.draftTakes) || 0) + draftTake;
-            }
-            let added = 0;
-            if (delta) {
-              doc.stats.corrected = doc.stats.corrected && typeof doc.stats.corrected === "object" ? doc.stats.corrected : {};
-              for (const [k, v] of Object.entries(delta)) {
-                const n = Math.max(0, Math.min(1e3, Math.floor(Number(v) || 0)));
-                if (!n) continue;
-                doc.stats.corrected[k] = Math.floor(Number(doc.stats.corrected[k]) || 0) + n;
-                added += n;
-              }
-            }
-            let learned = null;
-            if (learn) {
-              const wrong = typeof learn.wrong === "string" ? learn.wrong.trim() : "";
-              const right = typeof learn.right === "string" ? learn.right.trim() : "";
-              if (!wrong || !right || wrong === right || wrong.length > 40 || right.length > 40) {
-                return { status: 400, body: { error: "learn \u9700\u8981 {wrong,right}\uFF1A\u975E\u7A7A\u3001\u4E0D\u76F8\u7B49\u3001\u5404 \u226440 \u5B57" } };
-              }
-              const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-              const src = { by: "user", how: String(learn.how || "\u9875\u9762\u300C\u8BB0\u4E0B\u7EA0\u6B63\u300D"), at: nowIso };
-              doc.homophones = Array.isArray(doc.homophones) ? doc.homophones : [];
-              doc.people = Array.isArray(doc.people) ? doc.people : [];
-              const existed = doc.homophones.some((h) => h && h.wrong === wrong && h.right === right);
-              if (!existed) doc.homophones.push({ wrong, right, ambiguous: false, source: src });
-              let aliasAdded = false;
-              const person = doc.people.find((p) => p && p.canonical === right);
-              if (person) {
-                person.aliases = Array.isArray(person.aliases) ? person.aliases : [];
-                if (!person.aliases.includes(wrong)) {
-                  person.aliases.push(wrong);
-                  aliasAdded = true;
-                }
-                person.lastUsedAt = nowIso;
-              } else {
-                doc.people.push({ canonical: right, aliases: [wrong], note: "", source: src, lastUsedAt: nowIso });
-                aliasAdded = true;
-              }
-              if (!Array.isArray(doc.terms)) doc.terms = [];
-              if (!doc.terms.includes(right)) doc.terms.push(right);
-              learned = { wrong, right, homophoneAdded: !existed, aliasAdded };
-            }
-            doc.savedAt = Date.now();
-            await writeFileAtomic(file, JSON.stringify(doc, null, 2) + "\n", 384);
-            return {
-              status: 200,
-              body: {
-                ok: true,
-                added,
-                corrected: doc.stats && doc.stats.corrected || {},
-                draftTakes: Math.floor(Number(doc.stats && doc.stats.draftTakes) || 0),
-                learned
-              }
-            };
-          });
-          json(res, out.status, out.body);
-          return;
-        }
-        res.writeHead(405);
-        res.end();
-      } catch (err) {
-        json(res, 500, { error: String(err) });
-      }
-    }
-  });
-  register({
-    kind: "exact",
-    path: "/api/worktable/legacy-voice-check",
-    handler: async (_req, res) => {
-      try {
-        const raw = await readFile(voiceCheckLogPath(), "utf8");
-        const picked = pickVoiceCheckFields(JSON.parse(raw));
-        json(res, 200, picked ? { exists: true, ...picked } : { exists: false });
-      } catch {
-        json(res, 200, lastVoiceCheckPayload ? { exists: true, ...lastVoiceCheckPayload } : { exists: false });
-      }
-    }
-  });
-  const voiceConfig = loadVoiceConfig();
-  if (voiceConfig.invalid) {
-    try {
-      ctx.logger?.warn?.(voiceConfigInvalidWarning(String(voiceConfig.error || "invalid")));
-    } catch {
-    }
-  }
-  register({
-    kind: "exact",
-    path: "/api/worktable/voice-config",
-    handler: (_req, res) => {
-      json(res, 200, voiceConfig);
-    }
-  });
-  scheduleVoiceCheck(ctx);
-  register({
-    kind: "exact",
-    path: "/api/worktable/now",
-    handler: (_req, res) => {
-      const n = /* @__PURE__ */ new Date();
-      const pad2 = (v) => String(v).padStart(2, "0");
-      const wd = ["\u65E5", "\u4E00", "\u4E8C", "\u4E09", "\u56DB", "\u4E94", "\u516D"][n.getDay()];
-      const off = -n.getTimezoneOffset();
-      const tz = `UTC${off >= 0 ? "+" : "-"}${pad2(Math.floor(Math.abs(off) / 60))}:${pad2(Math.abs(off) % 60)}`;
-      let tzName = "";
-      try {
-        tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      } catch {
-        tzName = "";
-      }
-      json(res, 200, {
-        epoch: n.getTime(),
-        iso: n.toISOString(),
-        date: `${n.getFullYear()}-${pad2(n.getMonth() + 1)}-${pad2(n.getDate())}`,
-        time: `${pad2(n.getHours())}:${pad2(n.getMinutes())}`,
-        weekday: "\u661F\u671F" + wd,
-        tz,
-        tzName
-      });
-    }
-  });
-  const voiceAsrLog = (reason) => {
-    try {
-      const line = voiceAsrLogLine(reason);
-      if (reason === "disabled") ctx.logger?.info?.(line);
-      else ctx.logger?.warn?.(line);
-    } catch {
-    }
-  };
-  const voiceLimits = {
-    responseDeadlineMs: voiceLimitOverrides?.responseDeadlineMs ?? VOICE_ASR_RESPONSE_DEADLINE_MS,
-    providerTimeoutMs: voiceLimitOverrides?.providerTimeoutMs ?? VOICE_ASR_PROVIDER_TIMEOUT_MS,
-    maxInflight: voiceLimitOverrides?.maxInflight ?? VOICE_ASR_MAX_INFLIGHT,
-    maxPerMinute: voiceLimitOverrides?.maxPerMinute ?? VOICE_ASR_MAX_PER_MINUTE,
-    rawMaxBytes: voiceLimitOverrides?.rawMaxBytes ?? VOICE_ASR_MAX_BYTES
-  };
-  let voiceInFlight = 0;
-  const voiceRateStamps = [];
-  try {
-    register({
-      kind: "exact",
-      path: "/api/voice/asr",
-      handler: async (req, res) => {
-        if (!voiceConfig.voiceAsrEnabled) {
-          voiceAsrLog("disabled");
-          json(res, 200, { text: "" });
-          return;
-        }
-        if (voiceInFlight >= voiceLimits.maxInflight) {
-          voiceAsrLog("busy");
-          json(res, 200, { text: "" });
-          return;
-        }
-        const now = Date.now();
-        while (voiceRateStamps.length > 0 && now - voiceRateStamps[0] >= 6e4) voiceRateStamps.shift();
-        if (voiceRateStamps.length >= voiceLimits.maxPerMinute) {
-          voiceAsrLog("rate-limited");
-          json(res, 200, { text: "" });
-          return;
-        }
-        voiceRateStamps.push(now);
-        voiceInFlight += 1;
-        try {
-          const bytes = await readRawBody(req, voiceLimits.rawMaxBytes);
-          if (!bytes || !checkVoiceWaveBounds(bytes, voiceLimits.rawMaxBytes)) {
-            voiceAsrLog("rejected");
-            json(res, 200, { text: "" });
-            return;
-          }
-          let svc = null;
-          try {
-            svc = ctx.get?.("speechToText") ?? null;
-          } catch {
-            svc = null;
-          }
-          if (!svc || typeof svc.resolve !== "function" || typeof svc.transcribe !== "function") {
-            voiceAsrLog("unavailable");
-            json(res, 200, { text: "" });
-            return;
-          }
-          const spec = svc.resolve({ audio: bytes, language: "zh" });
-          const inference = Promise.resolve(svc.transcribe(spec, AbortSignal.timeout(voiceLimits.providerTimeoutMs)));
-          inference.catch(() => {
-          });
-          let deadlineHit = false;
-          let deadlineTimer = null;
-          const deadline = new Promise((resolveDeadline) => {
-            deadlineTimer = setTimeout(() => {
-              deadlineHit = true;
-              resolveDeadline(void 0);
-            }, voiceLimits.responseDeadlineMs);
-            try {
-              deadlineTimer.unref?.();
-            } catch {
-            }
-          });
-          let out;
-          try {
-            out = await Promise.race([inference, deadline]);
-          } finally {
-            clearTimeout(deadlineTimer);
-          }
-          if (deadlineHit) {
-            voiceAsrLog("timeout");
-            json(res, 200, { text: "" });
-            return;
-          }
-          json(res, 200, { text: typeof out?.text === "string" ? out.text : "" });
-        } catch {
-          voiceAsrLog("failed");
-          json(res, 200, { text: "" });
-        } finally {
-          voiceInFlight -= 1;
-        }
-      }
-    });
-  } catch (err) {
-    try {
-      ctx.logger?.warn?.("[dsh-worktable] /api/voice/asr \u6CE8\u518C\u5931\u8D25\uFF08\u5DF2\u8DF3\u8FC7\uFF1B\u4E0D\u5F71\u54CD\u63D2\u4EF6\u52A0\u8F7D\uFF09\uFF1A" + String(err?.message || err));
-    } catch {
-    }
-  }
   register({
     kind: "exact",
     path: "/api/worktable/workspaces",
@@ -1248,16 +951,10 @@ function apply(ctx, voiceLimitOverrides) {
           return;
         }
         const abs = pathResolve(p);
-        const cloudStateAbs = await readLocalConfigField("local.json", "cloudStatePath");
-        const badWrite = writeRejectFor(abs, cloudStateAbs);
-        if (badWrite) {
-          json(res, 403, { error: badWrite });
-          return;
-        }
         await import("node:fs/promises").then((m) => m.writeFile(abs, content, "utf8"));
         json(res, 200, { ok: true });
       } catch (err) {
-        json(res, 500, { error: String(err) });
+        json(res, err.status ?? 500, { error: String(err) });
       }
     }
   });
@@ -1278,11 +975,6 @@ function apply(ctx, voiceLimitOverrides) {
           return;
         }
         const abs = pathResolve(p);
-        const badMkdir = writePathReject(abs);
-        if (badMkdir) {
-          json(res, 403, { error: badMkdir });
-          return;
-        }
         const fsx = await import("node:fs/promises");
         const parent = dirname(abs);
         try {
@@ -1294,7 +986,7 @@ function apply(ctx, voiceLimitOverrides) {
         await fsx.mkdir(abs);
         json(res, 200, { ok: true, path: abs });
       } catch (err) {
-        json(res, err?.code === "EEXIST" ? 200 : 500, err?.code === "EEXIST" ? { ok: true, exists: true } : { error: String(err) });
+        json(res, err?.code === "EEXIST" ? 200 : err.status ?? 500, err?.code === "EEXIST" ? { ok: true, exists: true } : { error: String(err) });
       }
     }
   });
@@ -1302,49 +994,115 @@ function apply(ctx, voiceLimitOverrides) {
     kind: "exact",
     path: "/api/worktable/git",
     handler: async (req, res) => {
-      const body = await readJsonBody(req);
-      const cwd = serverCwd(ctx, body.sessionId, body.cwd);
-      json(res, 200, await gitStatus(cwd));
+      try {
+        const body = await readJsonBody(req);
+        const cwd = serverCwd(ctx, body.sessionId, body.cwd);
+        json(res, 200, await gitStatus(cwd));
+      } catch (err) {
+        json(res, err.status ?? 500, { error: String(err) });
+      }
+    }
+  });
+  const localConfigPaths = (fileName) => {
+    const out = [];
+    const envDir = process.env.DSH_WORKTABLE_LOCAL_DIR;
+    if (typeof envDir === "string" && envDir.trim()) out.push(pathResolve(envDir.trim(), fileName));
+    try {
+      const libDir = dirname(fileURLToPath(import.meta.url));
+      out.push(pathResolve(libDir, "..", "03_local", fileName));
+      out.push(pathResolve(libDir, "..", "..", "03_local", fileName));
+      out.push(pathResolve(libDir, "..", "..", "..", "03_local", fileName));
+    } catch {
+    }
+    try {
+      const home = resolveDshHomeSafe();
+      if (typeof home === "string" && home) out.push(pathResolve(home, "03_local", fileName));
+    } catch {
+    }
+    return out;
+  };
+  const readLocalConfigField = async (fileName, field) => {
+    for (const file of localConfigPaths(fileName)) {
+      try {
+        const raw = await readFile(file, "utf8");
+        const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
+        const value = parsed && typeof parsed === "object" ? parsed[field] : void 0;
+        const text = typeof value === "string" ? value.trim() : "";
+        if (text) return text;
+      } catch {
+      }
+    }
+    return null;
+  };
+  const statePath = async () => await readLocalConfigField("local.json", "cloudStatePath") ?? pathResolve(resolveDshHomeSafe(), "worktable-state.json");
+  register({
+    kind: "exact",
+    path: "/api/worktable/state",
+    handler: async (req, res) => {
+      const file = await statePath();
+      if (req.method === "GET" || req.method === "HEAD") {
+        try {
+          const raw = await readFile(file, "utf8");
+          const text = raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw;
+          const parsed = JSON.parse(text);
+          json(res, 200, { ok: true, path: file, state: parsed });
+        } catch (err) {
+          if (err?.code === "ENOENT") {
+            stateLog("GET empty (no file)");
+            json(res, 200, { ok: true, path: file, state: null });
+            return;
+          }
+          stateLog("GET error " + String(err));
+          json(res, 500, { error: String(err) });
+        }
+        return;
+      }
+      if (req.method !== "POST") {
+        json(res, 405, { error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        const incoming = body && typeof body.state === "object" && body.state !== null ? body.state : null;
+        if (!incoming) {
+          stateLog("POST 400 missing state");
+          json(res, 400, { error: "missing state" });
+          return;
+        }
+        let previous = null;
+        try {
+          const raw = await readFile(file, "utf8");
+          previous = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
+        } catch {
+        }
+        const state = previous && typeof previous === "object" && !Array.isArray(previous) ? { ...previous, ...incoming } : incoming;
+        const text = JSON.stringify(state);
+        const inN = incoming?.projects?.layouts?.length ?? 0;
+        const prevN = previous?.projects?.layouts?.length ?? 0;
+        if (inN < prevN) {
+          stateLog("WARN projects shrink " + prevN + " -> " + inN + " (keys=" + Object.keys(incoming).join("+") + ")");
+        }
+        if (text.length > 20 * 1024 * 1024) {
+          json(res, 413, { error: "state too large" });
+          return;
+        }
+        const fsx = await import("node:fs/promises");
+        await fsx.mkdir(dirname(file), { recursive: true });
+        const tmp = file + ".tmp-" + process.pid + "-" + Date.now();
+        await fsx.writeFile(tmp, text, "utf8");
+        await fsx.rename(tmp, file);
+        json(res, 200, { ok: true, path: file });
+      } catch (err) {
+        json(res, err?.status ?? 500, { error: String(err) });
+      }
     }
   });
   setupTerminal(webServer, ctx);
 }
 export {
   HEALTH_PATH,
-  LEGACY_VOICE_WARNING,
-  READ_JSON_MAX_BYTES,
-  VOICE_ASR_MAX_BYTES,
-  VOICE_ASR_MAX_INFLIGHT,
-  VOICE_ASR_MAX_PER_MINUTE,
-  VOICE_ASR_PROVIDER_TIMEOUT_MS,
-  VOICE_ASR_REASONS,
-  VOICE_ASR_RESPONSE_DEADLINE_MS,
-  VOICE_CHECK_CONCLUSIONS,
-  VOICE_CHECK_FIELDS,
-  VOICE_CONFIG_ERRORS,
   __wtLoadProbeStats,
-  __wtSetWritableRootsForTest,
   apply,
-  buildCheckPayload,
-  catalogCandidates,
-  checkVoiceWaveBounds,
-  detectLegacyLoaded,
-  firstReadable,
   inject,
-  name,
-  normalizeDraftTake,
-  parseLegacyMatch,
-  parseVoiceConfig,
-  patchCandidates,
-  pickVoiceCheckFields,
-  readBodyLimited,
-  readJsonBody,
-  stripYamlLineComment,
-  textMentionsLegacy,
-  textMentionsLegacyEntry,
-  voiceAsrLogLine,
-  voiceConfigInvalidWarning,
-  withFileLock,
-  writeFileAtomic,
-  writeRejectFor
+  name
 };

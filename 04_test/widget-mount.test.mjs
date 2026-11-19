@@ -226,7 +226,7 @@ test('loading legacy project state preserves its saved windows without using old
   const saved = specOf('old')
   saved.top[0].tabs = [{ id: 'old-tab', content: { kind: 'iframe', url: 'old.html' } }]
   const store = storage({ 'dsh.worktable.projects.v1': JSON.stringify({ layouts: [saved], folders: { old: 'C:/shared' } }), 'dsh.worktable.pendingMount.v1': JSON.stringify({ fresh: { content: 'old.html' } }) })
-  const load = evaluate(section(indexSource, 'function loadProjects()', '\nconst clamp') + '\nexport { loadProjects }', { localStorage: store, PROJECTS_KEY: 'dsh.worktable.projects.v1', DEFAULT_PROJECTS: {} }).loadProjects
+  const load = evaluate(section(indexSource, 'function normalizeProjects(', '\nconst clamp') + '\nexport { loadProjects }', { localStorage: store, PROJECTS_KEY: 'dsh.worktable.projects.v1', DEFAULT_PROJECTS: {} }).loadProjects
   assert.equal(load().layouts[0].top[0].tabs[0].content.url, 'old.html')
   assert.equal(new WidgetMountRegistry(store).entries().length, 0)
   assert.ok(!indexSource.includes("getItem('dsh.worktable.pendingMount.v1')"))

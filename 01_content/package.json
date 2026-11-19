@@ -1,14 +1,15 @@
 {
   "name": "dsh-worktable",
   "description": "工作台 Worktable：DeepSeek Harness 侧边栏的 agent 级项目容器（应用抽屉）",
-  "version": "0.4.8",
+  "version": "0.5.3-local.5",
   "repository": {
     "type": "git",
     "url": "https://github.com/qiudl/dsh-worktable.git",
     "directory": "01_content"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": "0.2.0-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.5 || 0.2.2-alpha.2"
   },
   "license": "MIT",
   "type": "module",
@@ -39,11 +40,12 @@
       ]
     },
     "compatibility": {
-      "dsh": "0.1.1-rc.2 || 0.1.2-rc.1 || 0.2.0-rc.2",
+      "dsh": "0.2.0-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.5 || 0.2.2-alpha.2",
       "dshReleases": {
-        "0.1.1-rc.2": "compatible",
-        "0.1.2-rc.1": "compatible",
-        "0.2.0-rc.2": "compatible"
+        "0.2.0-rc.2": "compatible",
+        "0.2.1-rc.3": "compatible",
+        "0.2.1-rc.5": "compatible",
+        "0.2.2-alpha.2": "compatible"
       }
     }
   },
@@ -52,16 +54,15 @@
     "check": "node --check lib/index.js && node --check lib/client.js",
     "pack": "node release-prep.mjs",
     "test:gate": "node client-factory-gate.test.mjs",
+    "test:sidebar": "node ../04_test/sidebar-popup.test.mjs",
     "test:input": "node ../04_test/host-input.test.mjs",
     "test:session": "node ../04_test/session-compat.test.mjs",
     "test:details": "node ../04_test/session-details.test.mjs",
+    "test:update": "node ../04_test/update-check.test.mjs",
     "test:transport": "node ../04_test/host-transport.test.mjs",
     "test:widget": "node ../04_test/widget-mount.test.mjs",
-    "verify:remote": "node verify-remote.mjs",
-    "test:cloudwrite": "node ../04_test/cloud-state-write.test.mjs",
-    "test:variantb": "node ../04_test/variant-b-subnav.test.mjs",
-    "test:cloudmerge": "node ../04_test/cloud-state-merge.test.mjs",
-    "test:cloudwiring": "node ../04_test/cloud-wiring.test.mjs"
+    "test:security": "node --test ../04_test/request-auth.test.mjs ../04_test/preview-files.test.mjs ../04_test/sandboxed-frame.test.mjs",
+    "verify:remote": "node verify-remote.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

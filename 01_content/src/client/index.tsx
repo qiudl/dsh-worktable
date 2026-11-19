@@ -5,13 +5,14 @@ import { isAbs, joinPath, parentPathOf, basenameOf } from './pathutil'
 import { splitStore, SplitWorkspace, setSplitT, setSplitEnv, type LayoutSpec, type SplitPane, type ConsoleCardData } from './split'
 import { appendHostInput } from './hostInput'
 import { worktableUpgrade } from './hostTransport'
-import { WidgetMountRegistry, newWidgetId, widgetManifestPath, WIDGET_BINDINGS_KEY, type WidgetBinding } from './widgetMount'
-import { mergeCloudState, mergeIntoLocal, mergeBindings, pruneHistory, CLOUD_HISTORY_LIMIT, type CloudPayload } from './cloudState'
-import { currentSessionOf, openHostSession, sendHostSession, createSessionSnapshotAdapter, childSessionIdsOf, pendingAckOf, sessionRuntimeMs } from './sessionCompat'
-import { cleanPreviewText, previewFromEvents, readSessionPreview, presetApiOf, modelApiOf, createHostSession, blankSessionNeedsWorkspace } from './sessionDetails'
+import { LOCAL_VERSION, cmpVer, newerUpdateInfo, type UpdateInfo } from './updateCheck'
+import { WidgetMountRegistry, newWidgetId, widgetManifestPath, type WidgetBinding } from './widgetMount'
+import { currentSessionOf, openHostSession, sendHostSession, createSessionSnapshotAdapter, childSessionIdsOf, pendingAckOf, sessionRuntimeMs, consoleStatusOf } from './sessionCompat'
+import { previewFromEvents, previewFromNodes, readSessionPreview, presetApiOf, modelApiOf, createHostSession, blankSessionNeedsWorkspace } from './sessionDetails'
 import { photoStore, kindOf } from './photoStore'
 import { DEFAULT_BG_SVG, b64ToBlob } from './defaultBg'
 import { WAVE_BG_B64 } from './waveBg'
+import { loadHostState, queueHostSave, markHydrated, staysReadOnly, flushHostSave } from './hostState'
 
 /**
  * dsh-worktable 客户端（v2）：侧边栏底部「工作台」区块。
@@ -30,8 +31,6 @@ type OrderBy = 'manual' | 'recent'
 type DockMode = 'footer' | 'float'
 
 // ── 更新检查（客户端直连 GitHub Releases API，只读 GET；失败静默）──
-declare const __WT_VERSION__: string
-const LOCAL_VERSION = typeof __WT_VERSION__ === 'undefined' ? 'dev' : __WT_VERSION__
 const UPDATE_REPO = 'qiudl/dsh-worktable'
 const { command: UPGRADE_CMD, prompt: UPGRADE_AI, desktop: DESKTOP_HOST } = worktableUpgrade()
 // 更新提示图标（手绘 SVG，避免 emoji 跨平台渲染差异）
@@ -49,17 +48,6 @@ const ICON_SPARK = (
     <path d="M12.6 11.2l.5 1.3 1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5z" fill="currentColor" />
   </svg>
 )
-type UpdateInfo = { latest: string; notes: string; url: string }
-function cmpVer(a: string, b: string): number {
-  const pa = a.split('.').map(Number)
-  const pb = b.split('.').map(Number)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] ?? 0
-    const y = pb[i] ?? 0
-    if (x !== y) return x - y
-  }
-  return 0
-}
 async function copyText(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true }
@@ -137,197 +125,8 @@ type ProjectsState = {
 
 const PERSIST_KEY = 'dsh.worktable.view.v1'
 const PROJECTS_KEY = 'dsh.worktable.projects.v1'
-
-/* ── 云端状态（本机分支新增）───────────────────────────────────────────────
- * 工作台原本只把项目/布局/绑定写进浏览器 localStorage，而 localStorage 以
- * origin（含端口）为作用域：dsh web 每次启动换端口 → 换存储分区 → 项目卡片全丢。
- *
- * 这里把同一份状态额外落到宿主侧的一个文件里，并放进独立 git 仓库（由外部定时
- * commit+push 到远端）。于是重启、换端口、清浏览器缓存、换机器都能恢复。
- *
- * 策略：仅当本地 localStorage 该键缺失（典型场景 = 换端口后的新 origin）时才用
- *       云端兜底填充；本地已有内容时以本地为准，并把本地现状推上云端——绝不会用
- *       一份较旧的云状态覆盖刚在本地做过的改动。
- * 落盘复用插件已有的 /api/worktable/write 与 /api/worktable/file 路由。
- * 落盘路径取本机配置：服务端只读路由 /api/worktable/local-paths 读 03_local/local.json
- * （本机目录、不入库）→ 源码与打包产物里零个人绝对路径；换机器只改那个配置文件。
- * ─────────────────────────────────────────────────────────────────────── */
-/** 云状态文件路径：mount 后由 loadCloudStatePath() 从本机配置注入。
- *  null = 本机没配置 → 整块云同步停用（本地 localStorage 读写照常，只是不再落云端文件）。 */
-let cloudStatePath: string | null = null
-const CLOUD_SYNC_ENABLED = true
-const CLOUD_PUSH_DEBOUNCE_MS = 800
-
-/** 读本机配置里的云状态文件路径；路由不可用 / 未配置 / 字段为空一律 null（绝不阻断启动）。 */
-async function loadCloudStatePath(): Promise<string | null> {
-  try {
-    const r = await fetch('/api/worktable/local-paths', { cache: 'no-store' })
-    if (!r.ok) return null
-    const d = await r.json()
-    const p = typeof d?.cloudState === 'string' ? d.cloudState.trim() : ''
-    return p || null
-  } catch { return null }
-}
-
-/** 组件挂载后注册：取出当前完整状态。viewRef/projectsRef 每次渲染都重新赋值，
- *  所以防抖到点时读到的就是最新状态（不会把半旧快照写上去）。 */
-let cloudStateGetter: null | (() => { view: unknown; projects: unknown; bindings: Record<string, unknown> | null }) = null
-let cloudPushTimer: ReturnType<typeof setTimeout> | null = null
-/** 最近一次自动推送的失败原因（空 = 无失败）。设置面板据此显示，避免“静默失效”。 */
-let cloudLastPushError = ''
-/** hydrate 是否已得出结论。**这一位是必须的**：挂载期间插件自己就会写 localStorage
- *  （控制室自愈的 persistProjects），若此时允许推送，就会抢在 hydrate 读到云端之前
- *  把「新 origin 的空状态」写上去、反而覆盖掉云端。
- *  2026-10-04 真实踩过：重启那刻云端被判空（folders/layouts 全没）。 */
-let cloudHydrated = false
-
-/** 项目状态里是否真有「用户自己攒的东西」。
- *  不能用「localStorage 键是否存在」判断本地为空——插件挂载时会自己写这个键
- *  （控制室自愈），所以必须看内容。
- *  views / lastUsed 由插件自动维护，不算用户内容的证据。 */
-function projectsPopulated(p: unknown): boolean {
-  if (!p || typeof p !== 'object') return false
-  const size = (v: unknown) => (Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v as object).length : 0))
-  const o = p as Record<string, unknown>
-  return size(o.order) + size(o.layouts) + size(o.folders) + size(o.bindings)
-    + size(o.shortcuts) + size(o.nameOverrides) + size(o.iconOverrides) + size(o.removed) > 0
-}
-
-/** 本机的「窗口自动挂载绑定」（per-origin 的 localStorage 键内容）；不是对象则 null。 */
-function readLocalBindings(): Record<string, unknown> | null {
-  try {
-    const raw = localStorage.getItem(WIDGET_BINDINGS_KEY)
-    if (!raw) return null
-    const d = JSON.parse(raw)
-    return d && typeof d === 'object' && !Array.isArray(d) ? d as Record<string, unknown> : null
-  } catch { return null }
-}
-
-/** 读本地三键（原始值，不做 load* 校正）→ 供合并使用。 */
-function localCloudState(): { view: unknown; projects: unknown; bindings: Record<string, unknown> | null } {
-  let view: unknown = null
-  let projects: unknown = null
-  try { const r = localStorage.getItem(PERSIST_KEY); view = r ? JSON.parse(r) : null } catch { view = null }
-  try { const r = localStorage.getItem(PROJECTS_KEY); projects = r ? JSON.parse(r) : null } catch { projects = null }
-  return { view, projects, bindings: readLocalBindings() }
-}
-
-/** 把合并结果写回本地；返回是否发生变化。
- *  绑定与本地再并集一次（本地优先）→ 云端恢复绝不会删掉本机已 revoke/新增的窗口绑定。 */
-function persistMergedLocally(projects: unknown, view: unknown, bindings: Record<string, unknown> | null | undefined): boolean {
-  let changed = false
-  try {
-    if (projects != null) {
-      const next = JSON.stringify(projects)
-      if (localStorage.getItem(PROJECTS_KEY) !== next) { localStorage.setItem(PROJECTS_KEY, next); changed = true }
-    }
-    if (view != null) {
-      const next = JSON.stringify(view)
-      if (localStorage.getItem(PERSIST_KEY) !== next) { localStorage.setItem(PERSIST_KEY, next); changed = true }
-    }
-    if (bindings && Object.keys(bindings).length) {
-      const merged = mergeBindings(readLocalBindings(), bindings)
-      const next = JSON.stringify(merged)
-      if (localStorage.getItem(WIDGET_BINDINGS_KEY) !== next) { localStorage.setItem(WIDGET_BINDINGS_KEY, next); changed = true }
-    }
-  } catch { /* 配额/隐私模式：失败不影响使用 */ }
-  return changed
-}
-
-/** 读云端 payload（含 bindings 与 history）；未配置/取不到/坏 JSON → null（绝不阻断启动）。 */
-async function fetchCloudState(): Promise<CloudPayload | null> {
-  const path = cloudStatePath
-  if (!CLOUD_SYNC_ENABLED || !path) return null
-  try {
-    const r = await fetch('/api/worktable/file?path=' + encodeURIComponent(path), { cache: 'no-store' })
-    if (!r.ok) return null
-    const raw = (await r.text()).trim()
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? (parsed as CloudPayload) : null
-  } catch { return null }
-}
-
-/** 读-合并-写：推送前先读云端，按 id 并集合并后再写（不再整份覆盖）。
- *  history 保留最近 CLOUD_HISTORY_LIMIT 份，供「退回上一份快照」。 */
-async function writeCloudState(): Promise<{ ok: boolean; error?: string; changed?: boolean }> {
-  const path = cloudStatePath
-  if (!CLOUD_SYNC_ENABLED || !path) return { ok: false, error: 'notConfigured' }
-  const get = cloudStateGetter
-  const local = get ? get() : localCloudState()
-  let remote: CloudPayload | null = null
-  try { remote = await fetchCloudState() } catch { remote = null }
-  const merged = mergeCloudState(remote, local as any, new Date().toISOString(), CLOUD_HISTORY_LIMIT)
-  try {
-    const r = await fetch('/api/worktable/write', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path, content: JSON.stringify(merged, null, 1) }),
-    })
-    if (!r.ok) {
-      const d: any = await r.json().catch(() => null)
-      cloudLastPushError = (d && d.error) || ('HTTP ' + r.status)
-      return { ok: false, error: cloudLastPushError }
-    }
-    // 合并结果也写回本地：云端可能带来本机没有的条目/窗口绑定
-    const changed = persistMergedLocally(merged.projects, undefined, merged.bindings ?? null)
-    cloudLastPushError = ''
-    return { ok: true, changed }
-  } catch (e: any) {
-    cloudLastPushError = String((e && e.message) || e)
-    return { ok: false, error: cloudLastPushError }
-  }
-}
-
-/** 从云端恢复：`merge`（默认，并集，绝不丢本地）或 `rollback`（用最近一份历史快照替换，先备份本地）。 */
-async function restoreCloudState(mode: 'merge' | 'rollback' = 'merge'):
-  Promise<{ ok: boolean; code?: string; error?: string; changed?: boolean; layouts?: number; history?: number; at?: string }> {
-  const path = cloudStatePath
-  if (!CLOUD_SYNC_ENABLED || !path) return { ok: false, code: 'notConfigured', error: 'notConfigured' }
-  const remote = await fetchCloudState()
-  if (!remote || (remote.projects == null && remote.bindings == null)) return { ok: false, code: 'empty', error: 'empty' }
-  const history = pruneHistory(remote.history)
-  // 备份当前本地（时间戳键）——误点也能找回
-  try {
-    const cur = localStorage.getItem(PROJECTS_KEY)
-    if (cur) localStorage.setItem(PROJECTS_KEY + '.bak-' + Date.now(), cur)
-  } catch { /* 备份失败不阻断恢复 */ }
-  let projects: unknown
-  let view: unknown
-  let bindings: Record<string, unknown> | null | undefined
-  if (mode === 'rollback') {
-    if (!history.length) return { ok: false, code: 'noHistory', error: 'noHistory' }
-    projects = history[0].projects
-    bindings = history[0].bindings
-    const local = localCloudState()
-    view = local.view ?? remote.view
-  } else {
-    const local = localCloudState()
-    const merged = mergeIntoLocal(remote, local as any)
-    projects = merged.projects
-    bindings = merged.bindings
-    view = local.view == null ? merged.view : undefined     // 本地已有 UI 偏好则不动
-  }
-  const changed = persistMergedLocally(projects, view, bindings)
-  const pr: any = projects
-  return {
-    ok: true, changed,
-    layouts: Array.isArray(pr?.layouts) ? pr.layouts.length : 0,
-    history: history.length,
-    at: remote.updatedAt,
-  }
-}
-
-/** 防抖推送完整状态到云端（读-合并-写）。失败静默：不影响本地使用，但失败原因记在 cloudLastPushError。 */
-function scheduleCloudPush(): void {
-  if (!CLOUD_SYNC_ENABLED || !cloudStatePath || !cloudStateGetter || !cloudHydrated) return
-  if (cloudPushTimer !== null) clearTimeout(cloudPushTimer)
-  cloudPushTimer = setTimeout(() => {
-    cloudPushTimer = null
-    void writeCloudState()
-  }, CLOUD_PUSH_DEBOUNCE_MS)
-}
-
+/** 本地最后写入时间（毫秒）：与宿主镜像的 updatedAt 比较，决定启动时以哪边为准 */
+const SAVED_AT_KEY = 'dsh.worktable.savedAt.v1'
 const MIN_TOP = 56
 const SNAP_PX = 32
 /** 插件市场外链（GitHub 仓库，已核实可访问；PRD 提及的 dshfind.com 未验证，不用死链）。 */
@@ -512,11 +311,11 @@ function normHsl(v: any): { h: number; s: number; l: number } | undefined {
   }
 }
 
-function loadView(): ViewState {
+/** 视图状态归一化（本地存档与宿主镜像共用同一套字段校验） */
+function normalizeView(raw: any): ViewState {
   try {
-    const raw = localStorage.getItem(PERSIST_KEY)
-    if (!raw) return { ...DEFAULT_VIEW }
-    const p = JSON.parse(raw)
+    if (!raw || typeof raw !== 'object') return { ...DEFAULT_VIEW }
+    const p = raw
     // 显式挑字段：旧版遗留的 groupBy 等未知字段直接忽略。
     // 一次性迁移：v2 起默认「手动」排序（最近排序点击即置顶、体验差），旧存「最近」回落为「手动」；
     // 之后用户手动选择「最近」会写入 sortMigratedV2 标记并被尊重。
@@ -560,11 +359,21 @@ function loadView(): ViewState {
   }
 }
 
-function loadProjects(): ProjectsState {
+function loadView(): ViewState {
   try {
-    const raw = localStorage.getItem(PROJECTS_KEY)
-    if (!raw) return { ...DEFAULT_PROJECTS }
-    const p = JSON.parse(raw)
+    const raw = localStorage.getItem(PERSIST_KEY)
+    if (!raw) return { ...DEFAULT_VIEW }
+    return normalizeView(JSON.parse(raw))
+  } catch {
+    return { ...DEFAULT_VIEW }
+  }
+}
+
+/** 项目状态归一化（本地存档与宿主镜像共用同一套字段校验） */
+function normalizeProjects(raw: any): ProjectsState {
+  try {
+    if (!raw || typeof raw !== 'object') return { ...DEFAULT_PROJECTS }
+    const p = raw
     return {
       order: Array.isArray(p.order) ? p.order.filter((x: unknown): x is string => typeof x === 'string') : [],
       lastUsed: p.lastUsed && typeof p.lastUsed === 'object' ? p.lastUsed : {},
@@ -585,6 +394,21 @@ function loadProjects(): ProjectsState {
   } catch {
     return { ...DEFAULT_PROJECTS }
   }
+}
+
+function loadProjects(): ProjectsState {
+  try {
+    const raw = localStorage.getItem(PROJECTS_KEY)
+    if (!raw) return { ...DEFAULT_PROJECTS }
+    return normalizeProjects(JSON.parse(raw))
+  } catch {
+    return { ...DEFAULT_PROJECTS }
+  }
+}
+
+/** 记下本地写入时间，供启动时与宿主镜像比较新鲜度 */
+function markSaved(): void {
+  try { localStorage.setItem(SAVED_AT_KEY, String(Date.now())) } catch {}
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
@@ -810,27 +634,13 @@ function schedulePreviewSweep() {
   previewTimer = window.setTimeout(() => { previewTimer = null; sweepPreviews() }, 6000)
 }
 
-/** 从会话快照节点里提取最近一条文本（纯读内存镜像，零 Token；代码清洗后无则 ''） */
+/** 从宿主内存镜像提取最近助手文本；无可读答复则留空，不回退注入/推理/工具内容。 */
 function lastTextOf(sid: string): string {
   try {
     const binding = sessionBridge?.sessions?.binding?.(sid)
     if (binding?.eventSource?.getSnapshot) return previewFromEvents(binding.eventSource.getSnapshot().entries)
     const face = binding?.session?.getSnapshot?.()
-    const nodes: any[] = face?.nodes ?? []
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const n = nodes[i]
-      const blocks = Array.isArray(n?.blocks) ? n.blocks : (Array.isArray(n?.content) ? n.content : [])
-      let raw = ''
-      for (const b of blocks) {
-        const s = typeof b?.text === 'string' ? b.text.trim() : ''
-        if (!s) continue
-        if (b?.type === 'text') { raw = s; break }
-        if (!raw) raw = s
-      }
-      if (!raw) continue
-      const clean = cleanPreviewText(raw)
-      if (clean.length >= 8) return clean.slice(0, 220)
-    }
+    return previewFromNodes(face?.nodes)
   } catch {}
   return ''
 }
@@ -951,7 +761,7 @@ function buildWindowTaskText(projectId: string, projectName: string, windowLabel
     ? '项目文件夹：' + folder + '（本项目所有产出文件一律放进这个文件夹；不要写到别的默认位置）。'
     : '本项目暂未设置专属文件夹：产出文件先向用户确认存放位置，不要随便写。'
   const lines = [
-    '【工作台自定义窗口任务】',
+    '【工作台】',
     '以下内容由 dsh-worktable（工作台）插件' + (mode === 'new' ? '自动发送' : '发送') + '：用户想把「' + projectName + '」项目中的「' + win + '」窗口打造成他想要的内容。',
     '1. dsh-worktable 是侧边栏底部的自建「工作台」插件（官方文档没有它的说明，不了解之处可直接向用户提问）。',
     '2. 用户需求：' + requirement,
@@ -1099,84 +909,6 @@ function invalidateWidgetProject(projectId: string) {
   persistPendingWidgets()
 }
 
-/** ===== 收起态 rail 的二级菜单（页面自报导航 → 宿主渲染） =====
- *  页面（同源 iframe 里的 HTML 产物）在加载与切换页签时 postMessage 上报 {type:'dsh-wt-nav', items, active}；
- *  这里按项目缓存（localStorage），因为收起态不挂载窗格、拿不到 iframe，必须缓存后才能渲染子菜单。
- *  点二级菜单项 → 找到承载该产物的 iframe 标签并打开项目，然后把目标页签回发/写 hash。 */
-const RAIL_NAV_KEY = 'dsh.worktable.railNav.v1'
-/** 宿主项目卡片选择器（导出供单测钉住）：排除插件自渲染的布局卡与行内二级菜单项。 */
-export const PROJECT_CARD_SELECTOR = 'button:not(.dsh-wt_layout):not(.dsh-wt_subNavItem)'
-
-type RailNavItem = { id: string; label: string }
-type RailNavEntry = { url: string; title?: string; items: RailNavItem[]; active?: string; ts: number }
-const pendingRailTab: Record<string, string> = Object.create(null)
-const pendingOpenCfg: Record<string, boolean> = Object.create(null)
-function loadRailNavs(): Record<string, RailNavEntry> {
-  try {
-    const d = JSON.parse(localStorage.getItem(RAIL_NAV_KEY) ?? '{}')
-    return d && typeof d === 'object' && !Array.isArray(d) ? d : {}
-  } catch { return {} }
-}
-function saveRailNavs(v: Record<string, RailNavEntry>) {
-  try { localStorage.setItem(RAIL_NAV_KEY, JSON.stringify(v)) } catch { /* 存不下不影响本次会话 */ }
-}
-const stripHash = (u: string) => String(u).split('#')[0]
-function eachPane(spec: any, fn: (pane: any, row: string, i: number) => void) {
-  if (!spec) return
-  if (Array.isArray(spec.top)) spec.top.forEach((p: any, i: number) => fn(p, 'top', i))
-  if (Array.isArray(spec.main)) spec.main.forEach((p: any, i: number) => fn(p, 'main', i))
-  if (spec.left) fn(spec.left, 'left', 0)
-}
-function specHasIframeUrl(spec: any, url: string): boolean {
-  let hit = false
-  const target = stripHash(url)
-  eachPane(spec, (pane) => {
-    if (pane?.content?.kind === 'iframe' && stripHash(pane.content.url ?? '') === target) hit = true
-    if (Array.isArray(pane?.tabs)) pane.tabs.forEach((t: any) => { if (t?.content?.kind === 'iframe' && stripHash(t.content.url ?? '') === target) hit = true })
-  })
-  return hit
-}
-function artifactUrlIn(spec: any): string | null {
-  let found: string | null = null
-  eachPane(spec, (pane) => {
-    if (found) return
-    if (pane?.content?.kind === 'iframe' && pane.content.url) { found = pane.content.url; return }
-    if (Array.isArray(pane?.tabs)) for (const t of pane.tabs) { if (t?.content?.kind === 'iframe' && t.content.url) { found = t.content.url; break } }
-  })
-  return found
-}
-/** 从站点托管 URL 反推产物所在目录：/api/worktable/site/<enc dir>/<file> → <dir> */
-function siteDirOf(url: string): string | null {
-  const m = /^\/api\/worktable\/site\/([^/]+)\//.exec(String(url || ''))
-  if (!m) return null
-  try { return decodeURIComponent(m[1]) } catch { return null }
-}
-
-/** 深拷贝 spec，并把承载 url 的 iframe 标签改写成 <url>#tab=<tabId>（冷启动就落到目标页签） */
-function specWithTabHash(spec: any, url: string, tabId: string): any {
-  const target = stripHash(url)
-  const next = JSON.parse(JSON.stringify(spec))
-  eachPane(next, (pane) => {
-    if (pane?.content?.kind === 'iframe' && stripHash(pane.content.url ?? '') === target) pane.content.url = target + '#tab=' + tabId
-    if (Array.isArray(pane?.tabs)) pane.tabs.forEach((t: any, i: number) => {
-      if (t?.content?.kind === 'iframe' && stripHash(t.content.url ?? '') === target) { t.content.url = target + '#tab=' + tabId; pane.active = i }
-    })
-  })
-  return next
-}
-/** 兜底：同源直接改活动 iframe 的 hash（不整页刷新），页面用 hashchange 切页 */
-function applyTabHashToFrame(url: string, tabId: string): boolean {
-  const target = stripHash(url)
-  try {
-    for (const f of Array.from(document.querySelectorAll<HTMLIFrameElement>('iframe.dsh-wt_paneFrame'))) {
-      if (stripHash(f.getAttribute('src') ?? '') !== target) continue
-      const w: any = f.contentWindow
-      if (w && w.location) { w.location.hash = '#tab=' + tabId; return true }
-    }
-  } catch { /* 跨域或未挂载 */ }
-  return false
-}
-
 /** 产物清单 → 窗口内容（html=目录级托管 iframe / url=外链 iframe / file=文件预览） */
 function buildMountContent(folder: string, d: any): any {
   const p = String(d?.path ?? '').trim()
@@ -1191,7 +923,7 @@ function buildMountContent(folder: string, d: any): any {
 
 /** 每会话最近观察到的待决身份；同为 need 的问题替换也必须重新点亮。 */
 const notifyStateSeenRef: { current: Record<string, string | null> } = { current: {} }
-/** 每会话最近观察到的「已完成」布尔值：新一次完成时清除旧 done ack（控制室绿光重新点亮） */
+/** 每会话最近观察到的结束边沿：新一轮结束清除旧 done ack；结束不表示成功。 */
 const doneSeenRef: { current: Record<string, boolean> } = { current: {} }
 /** 清除某会话的 ack 记录（状态转移时调用，保证新问题不会被旧确认压住） */
 function clearNotifyAck(sid: string) {
@@ -1204,11 +936,12 @@ function clearNotifyAck(sid: string) {
   } catch {}
 }
 
-/** 会话状态 → 提醒类型：待决(黄) 优先于 完成(绿)——等待用户判断时 pendingInteraction 与
+/** 会话状态 → 提醒类型：待决(黄) 优先于 本轮结束(中性)——等待用户判断时 pendingInteraction 与
  *  running 会同时为真，原生 UI 以黄点优先，镜像必须一致 */
 function sessionNotifyState(entry: any): 'done' | 'need' | null {
   if (!entry) return null
   if (entry.pendingInteraction != null) return 'need'
+  if (entry.running === true) return null
   if (entry.completed === true) return 'done'
   return null
 }
@@ -1331,58 +1064,12 @@ function WorktableSection(props: any) {
   const [registeredIds, setRegisteredIds] = useState<string[]>(() => [...registryStore.ids])
   const [addOpen, setAddOpen] = useState(false)
   const [viewOptionsOpen, setViewOptionsOpen] = useState(false)
-  /** 云同步（本机状态文件）：设置面板里的「从云端恢复 / 推送到云端」+ 快照信息。
-   *  路径由服务端 /api/worktable/local-paths 从 03_local/local.json 解析（含 DSH_HOME 兜底）。 */
-  const [cloudBusy, setCloudBusy] = useState<'' | 'restore' | 'push'>('')
-  const [cloudStatus, setCloudStatus] = useState('')
-  const [cloudMeta, setCloudMeta] = useState<{ path: string | null; updatedAt?: string; layouts: number; history: number } | null>(null)
-  /** 合并/恢复后把本地状态同步进 React（并让窗口绑定注册器重读 localStorage）。 */
-  const cloudRefreshUi = (changed: boolean) => {
-    if (!changed) return
-    setView(loadView()); setProjects(loadProjects())
-    try { widgetRegistry.reload() } catch { /* 注册器不可用不影响其余状态 */ }
-  }
-  const loadCloudMeta = async () => {
-    const cloud: any = await fetchCloudState()
-    const pr: any = cloud && cloud.projects
-    setCloudMeta({
-      path: cloudStatePath,
-      updatedAt: cloud?.updatedAt,
-      layouts: Array.isArray(pr?.layouts) ? pr.layouts.length : 0,
-      history: pruneHistory(cloud?.history).length,
-    })
-  }
-  useEffect(() => { if (viewOptionsOpen) void loadCloudMeta() }, [viewOptionsOpen])
-  const cloudRestoreNow = async () => {
-    setCloudBusy('restore'); setCloudStatus('')
-    try {
-      const r = await restoreCloudState('merge')
-      if (!r.ok) { setCloudStatus(r.code === 'empty' ? t('cloud.empty') : t('cloud.notConfigured')); return }
-      cloudRefreshUi(!!r.changed)
-      setCloudStatus(t('cloud.restored', { n: String(r.layouts ?? 0) }))
-      void loadCloudMeta()
-    } catch { setCloudStatus(t('cloud.failed')) } finally { setCloudBusy('') }
-  }
-  const cloudRollbackNow = async () => {
-    setCloudBusy('rollback'); setCloudStatus('')
-    try {
-      const r = await restoreCloudState('rollback')
-      if (!r.ok) { setCloudStatus(r.code === 'noHistory' ? t('cloud.noHistory') : t('cloud.empty')); return }
-      cloudRefreshUi(!!r.changed)
-      setCloudStatus(t('cloud.rolled', { n: String(r.layouts ?? 0) }))
-      void loadCloudMeta()
-    } catch { setCloudStatus(t('cloud.failed')) } finally { setCloudBusy('') }
-  }
-  const cloudPushNow = async () => {
-    setCloudBusy('push'); setCloudStatus('')
-    try {
-      const r = await writeCloudState()
-      setCloudStatus(r.ok ? t('cloud.pushed') : t('cloud.failed'))
-      if (r.ok) { cloudRefreshUi(!!r.changed); void loadCloudMeta() }
-    } catch { setCloudStatus(t('cloud.failed')) } finally { setCloudBusy('') }
-  }
+  // REQ-20261117-0013：收起态 rail 的「更多」菜单。rail 原先把控制室/项目/快捷方式/布局
+  // 四类全平铺且无数量上限，项目一多就堆满一列；改为只显示前 RAIL_MAX 个，其余进菜单。
+  const [railMoreOpen, setRailMoreOpen] = useState(false)
   // 更新检查：徽标 / 更新卡 / 版本行共用；节流一天一次，忽略按版本号存 localStorage
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [rawUpdateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const updateInfo = newerUpdateInfo(rawUpdateInfo)
   const [updateCheckOn, setUpdateCheckOn] = useState<boolean>(() => localStorage.getItem('dsh.worktable.updateCheck.v1') !== '0')
   const [updateCopied, setUpdateCopied] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'uptodate' | 'failed'>('idle')
@@ -1391,9 +1078,12 @@ function WorktableSection(props: any) {
   useEffect(() => () => { updateAliveRef.current = false }, [])
   const checkUpdates = useCallback(async (force = false) => {
     if (updateCheckingRef.current) return // 防重入：并发点击只保留一个 in-flight
-    const last = Number(localStorage.getItem('dsh.worktable.lastUpdateCheck.v1') ?? '0')
-    if (!force && Date.now() - last < 24 * 3600 * 1000) return // 自动检查节流；手动「立即检查」绕过节流
+    let last = 0
+    try { last = Number(localStorage.getItem('dsh.worktable.lastUpdateCheck.v1') ?? '0') } catch {}
+    const age = Date.now() - last
+    if (!force && Number.isFinite(last) && last > 0 && age >= 0 && age < 24 * 3600 * 1000) return // 自动检查节流；手动「立即检查」绕过节流
     updateCheckingRef.current = true
+    setUpdateInfo(null) // Every new result replaces the old card, including failure/no update.
     setUpdateStatus('checking')
     try {
       let d: { tag_name?: string; body?: string; html_url?: string } | null = null
@@ -1409,11 +1099,12 @@ function WorktableSection(props: any) {
       }
       if (!updateAliveRef.current) return // 组件已卸载：不再更新状态
       if (!d) { setUpdateStatus('failed'); return }
-      localStorage.setItem('dsh.worktable.lastUpdateCheck.v1', String(Date.now()))
-      const tag = (d.tag_name ?? '').replace(/^v/, '')
-      if (!tag || cmpVer(tag, LOCAL_VERSION) <= 0) { setUpdateStatus('uptodate'); return }
-      if ((localStorage.getItem('dsh.worktable.skipVersion.v1') ?? '') === tag) { setUpdateStatus('uptodate'); return }
-      setUpdateInfo({ latest: tag, notes: (d.body ?? '').slice(0, 800), url: d.html_url ?? '' })
+      try { localStorage.setItem('dsh.worktable.lastUpdateCheck.v1', String(Date.now())) } catch {}
+      const tag = typeof d.tag_name === 'string' ? d.tag_name.trim() : ''
+      const order = cmpVer(tag, LOCAL_VERSION)
+      if (order == null) { setUpdateStatus('failed'); return }
+      if (order <= 0) { setUpdateStatus('uptodate'); return }
+      setUpdateInfo(newerUpdateInfo({ latest: tag.replace(/^v/, ''), notes: typeof d.body === 'string' ? d.body.slice(0, 800) : '', url: typeof d.html_url === 'string' ? d.html_url : '' }))
       setUpdateStatus('uptodate')
     } finally {
       updateCheckingRef.current = false
@@ -1518,15 +1209,10 @@ function WorktableSection(props: any) {
       if (!sid) return 'idle'
       const e = byId[sid]
       if (!e) return 'idle'
-      if (pendingAckForSession(sid) != null) return 'need'
-      if (e.completed === true) return 'done'
-      // 会话面兜底：宿主快照可能滞后或缺少完成字段
-      try {
-        const face = sessionBridge?.sessions?.binding?.(sid)?.session?.getSnapshot?.()
-        if (face && face.completed === true) return 'done'
-      } catch {}
-      if (e.running === true) return 'busy'
-      return 'idle'
+      // Read an existing binding only; never activate a cold session to classify status.
+      let face: any
+      try { face = sessionBridge?.sessions?.binding?.(sid)?.session?.getSnapshot?.() } catch {}
+      return consoleStatusOf(e, pendingAckForSession(sid), face)
     }
     // 运行时长：任务 startedAt → 新版 chat legacy.turnTimings → 旧会话面；未知不虚构。
     const runtimeOf = (sid: string | undefined): number | null => {
@@ -1537,7 +1223,7 @@ function WorktableSection(props: any) {
     const make = (id: string, name: string, icon: string, self: boolean): ConsoleCardData => {
       const sid = pr.projects.bindings[id]
       const status = statusOf(sid)
-      // 发光 = 完成/待决且本轮未被确认；点卡片确认后熄灭
+      // 发光 = 本轮结束/待决且未被确认；结束不承诺任务成功。
       const glow = !!sid && ((status === 'done' && ackMap[sid] !== 'done') || (status === 'need' && ackMap[sid] !== pendingAckForSession(sid)))
       return {
         id, name, icon,
@@ -1725,74 +1411,69 @@ function WorktableSection(props: any) {
     setView((prev) => {
       const next = { ...prev, ...patch }
       try { localStorage.setItem(PERSIST_KEY, JSON.stringify({ ...next, sortMigratedV2: true })) } catch {}
+      markSaved()
+      queueHostSave({ view: next })
       return next
     })
-    scheduleCloudPush()
   }
 
   const persistProjects = (patch: Partial<ProjectsState> | ((prev: ProjectsState) => ProjectsState)) => {
     setProjects((prev) => {
       const next = typeof patch === 'function' ? patch(prev) : { ...prev, ...patch }
       try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(next)) } catch {}
+      markSaved()
+      queueHostSave({ projects: next })
       return next
     })
-    scheduleCloudPush()
   }
 
-  // 云端状态：读云端 → 判定「以本地为准还是以云端为准」→ 之后才开闸允许推送。
-  // 顺序很关键：判定完成前任何 persist 都不许推云端，否则会把新 origin 的空状态写上去。
+  /**
+   * 宿主侧状态恢复（本地补丁）：桌面端每次启动端口随机，localStorage 按来源隔离，
+   * 重启后本地必然是空的。这里比对「本地最后写入时间」与「宿主镜像 updatedAt」，
+   * 只在宿主更新时回填，避免用旧镜像盖掉当前页面刚改的内容。
+   * 恢复判定结束前不写宿主（markHydrated），防止首屏默认值先把镜像冲掉。
+   */
   useEffect(() => {
     let cancelled = false
-    cloudStateGetter = () => ({ view: viewRef.current, projects: projectsRef.current?.projects ?? null })
     void (async () => {
-      // 第 0 步：先取本机配置的落盘路径（在第一次读/写之前 await，cloudHydrated 仍为 false）。
-      // 本机没配置 → 整块云同步停用：不读云端、不开推送闸（localStorage 读写不受影响）。
-      cloudStatePath = await loadCloudStatePath()
+      let localAt = 0
+      try { localAt = Number(localStorage.getItem(SAVED_AT_KEY) ?? '0') || 0 } catch {}
+      const res = await loadHostState(localAt)
       if (cancelled) return
-      if (!cloudStatePath) {
-        try { if (typeof console !== 'undefined' && console.info) console.info('[dsh-worktable] 未配置本机云状态路径（03_local/local.json 的 cloudStatePath），云同步已停用；本地状态读写不受影响。') } catch {}
+      if (!res.reachable) {
+        // 读不到就不写：宁可本次只在本地，也不拿空状态覆盖宿主镜像
+        staysReadOnly()
+        console.warn('[dsh-worktable] 宿主状态暂不可读，本次会话不写镜像')
         return
       }
-      // 启动恢复：不再要求"本地为空"——始终与云端做并集合并（本地有内容也不丢云端，
-      // 云端有内容也不删本地），这同时修掉了旧规则下"本地有一点东西就跳过恢复"的缺口。
-      let cloud: CloudPayload | null = null
-      try { cloud = await fetchCloudState() } catch { cloud = null }
-      if (cancelled) return
-      let changed = false
-      if (cloud) {
-        const local = localCloudState()
-        const merged = mergeIntoLocal(cloud, local as any)
-        // view 只在本地没有时写（避免把本机 UI 偏好顶掉）；绑定与本地并集，绝不删本机记录
-        changed = persistMergedLocally(merged.projects, local.view == null ? merged.view : undefined, merged.bindings)
+      const host = res.state
+      // REQ-20261117-0013：兼容旧云状态文件的 updatedAt 形态。
+      // 旧线（qiudl 0.4.x 云状态）写的是 ISO 字符串（如 "2026-11-18T03:50:24.470Z"），
+      // 本线写毫秒数字。两种都认，否则把状态文件指到那个 git 仓后会永远判「宿主不比本地新」而不回填。
+      const rawAt: unknown = host?.updatedAt
+      const hostAt = typeof rawAt === 'number'
+        ? rawAt
+        : typeof rawAt === 'string' ? (Number.isFinite(Date.parse(rawAt)) ? Date.parse(rawAt) : 0) : 0
+      if (host && hostAt > localAt) {
+        if (host.projects) persistProjects(normalizeProjects(host.projects))
+        if (host.view) persistView(normalizeView(host.view))
+        // 以宿主为准：作废首屏自愈等早于恢复的待写内容，避免半截空值回写
+        markHydrated({ projects: host.projects, view: host.view })
+      } else {
+        // 本地更新或宿主还没有镜像：什么都不发，等用户真的改动再写
+        markHydrated(null)
       }
-      if (cancelled) return
-      if (changed) {
-        // 交给既有的 load* 做一次同款校正，避免把未校验的数据直接塞进 state
-        setView(loadView())
-        setProjects(loadProjects())
-        // 绑定可能刚从云端补回来（本 origin 的 localStorage 原本没有）→ 让注册器重读
-        try { widgetRegistry.reload() } catch { /* 注册器不可用不影响其余状态 */ }
-      }
-      // 判定结束 → 开闸，并把当前（合并后的）状态推上去（云端也就补齐了本机独有的内容）
-      cloudHydrated = true
-      scheduleCloudPush()
-    })().finally(() => { cloudHydrated = true })
-    return () => { cancelled = true; cloudStateGetter = null }
+    })()
+    const flush = () => flushHostSave()
+    window.addEventListener('pagehide', flush)
+    window.addEventListener('beforeunload', flush)
+    return () => {
+      cancelled = true
+      window.removeEventListener('pagehide', flush)
+      window.removeEventListener('beforeunload', flush)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // 把当前项目的文件夹上报给宿主服务端 → 作为 write/mkdir 的可写根白名单。
-  // 服务端对 /api/worktable/* 已全量鉴权（cookie），这条只是收窄「写哪儿」。
-  const foldersKey = Object.values(projects.folders ?? {}).join('|')
-  useEffect(() => {
-    const folders = Object.values(projects.folders ?? {})
-      .filter((x): x is string => typeof x === 'string' && x.length > 0)
-    if (!folders.length) return
-    void fetch('/api/worktable/roots', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folders }),
-    }).catch(() => { /* 上报失败：服务端保留上一次白名单 */ })
-  }, [foldersKey])
 
   // 自愈：启动时若控制室存档是坏布局（旧版关掉控制室标签造成窗格退化成选择器），立即重建默认面板
   useEffect(() => {
@@ -2353,7 +2034,7 @@ function buildCustomLayoutPrompt(req: string): string {
     return childSessionIdsOf(sessionsSnapshotStore.snapshot, sid)
   }, [])
 
-  /** 项目 → 提醒态：绑定会话（含其子代理）待决(黄) > 完成(绿) > 工作中(蓝)；
+  /** 项目 → 提醒态：绑定会话（含其子代理）待决(黄) > 本轮结束(中性) > 工作中(蓝)；
    *  状态转移自动清除旧 ack——原生 UI 每个新问题都会重新亮黄，镜像不得被旧确认压住 */
   const bindNotifyMap: Record<string, 'done' | 'need' | 'busy'> = useMemo(() => {
     const map: Record<string, 'done' | 'need' | 'busy'> = {}
@@ -2546,16 +2227,10 @@ function buildCustomLayoutPrompt(req: string): string {
     if (!folderPath) { setWsFolderError(true); return }
     if (!isAbs(folderPath)) { setWsFolderError(true); return }
     try {
-      // 新建工作区 = 用户显式声明「此目录就是项目文件夹」：必须先上报为可写根，再建目录。
-      // 顺序不可交换：服务端的写入根白名单只由**已存在项目**的文件夹上报，新项目在保存成功前
-      // 不在白名单里，先 mkdir 必被 403（outside project folders）拒绝 → 新建项目死锁。
-      try {
-        await fetch('/api/worktable/roots', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ folders: [folderPath] }) })
-      } catch { /* 上报失败不阻断：目标已在白名单内时 mkdir 仍可能成功 */ }
       // 兜底建目录；HTTP 非 2xx 视为失败，不能继续保存（路径可能无效）
       const r = await fetch('/api/worktable/mkdir', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: folderPath }) })
-      if (!r.ok) { setPickErr((prev) => ({ ...prev, add: t('add.folderCreateFail') })); return }
-    } catch { setPickErr((prev) => ({ ...prev, add: t('add.folderCreateFail') })); return }
+      if (!r.ok) { setWsFolderError(true); setPickErr((prev) => ({ ...prev, add: t('add.folderCreateFail') })); return }
+    } catch { setWsFolderError(true); setPickErr((prev) => ({ ...prev, add: t('add.folderCreateFail') })); return }
     const layout = buildLayout(wsPreset, name)
     persistProjects((prev) => ({ ...prev, layouts: [...prev.layouts, layout], folders: { ...prev.folders, [layout.id]: folderPath } }))
     invalidatePickState() // 保存成功：失效在途选择请求（防止旧选择器稍后返回写回已重置的表单）
@@ -2679,9 +2354,6 @@ function buildCustomLayoutPrompt(req: string): string {
     persistProjects((prev) => ({ ...prev, iconOverrides: { ...prev.iconOverrides, [id]: icon } }))
   }
 
-  // 入驻项目卡片选择器：**必须排除插件自渲染的按钮**——布局卡（.dsh-wt_layout）与
-  // 方案 B 的行内二级菜单项（.dsh-wt_subNavItem）都在 .dsh-wt_projects 里，
-  // 漏掉后者会把菜单项当成"项目卡片"、把 data-wt-id 标错位（2026-10-08 实现 B 时发现）。
   // ── 入驻项目卡片通用 DOM 桥（不写死任何项目名/类名） ──
   // 卡片按子座位注册顺序渲染，与 aliveRegisteredIds 一一对应：
   // 1) 位置映射：给每张卡片标 data-wt-id，图标覆盖写到卡片第一个子元素（通用结构约定）；
@@ -2691,7 +2363,7 @@ function buildCustomLayoutPrompt(req: string): string {
       const box = document.querySelector<HTMLElement>('.dsh-wt_projects')
       if (!box) return
       // 子座位把所有卡片包在一个无类容器里：直接取卡片按钮（DOM 序 = 注册序），排除自渲染的布局卡
-      const cards = Array.from(box.querySelectorAll<HTMLElement>(PROJECT_CARD_SELECTOR))
+      const cards = Array.from(box.querySelectorAll<HTMLElement>('button:not(.dsh-wt_layout)'))
       cards.forEach((el, i) => {
         const id = aliveRegisteredIds[i]
         if (id) {
@@ -2890,55 +2562,6 @@ function buildCustomLayoutPrompt(req: string): string {
     return () => window.removeEventListener('resize', recalc)
   }, [viewOptionsOpen, updateInfo, sectionTop])
 
-  /** 项目二级菜单的导航数据：结构来自产物目录的 rail-nav.json（预读），当前页来自页面上报。 */
-  const [railNavs, setRailNavs] = useState<Record<string, RailNavEntry>>(() => loadRailNavs())
-  /** 方案 B：展开态面板里「行内展开」的项目 id（同一时刻只展开一个）。 */
-  const [openSubId, setOpenSubId] = useState<string | null>(null)
-  useEffect(() => {
-    const onMsg = (e: MessageEvent) => {
-      const d: any = e.data
-      if (!d || d.type !== 'dsh-wt-nav' || !Array.isArray(d.items) || !d.items.length) return
-      let url: string | undefined
-      try {
-        for (const f of Array.from(document.querySelectorAll<HTMLIFrameElement>('iframe.dsh-wt_paneFrame'))) {
-          if (f.contentWindow === e.source) { url = f.getAttribute('src') ?? undefined; break }
-        }
-      } catch { /* 同源读取失败就只按当前布局兜底 */ }
-      const views = projectsRef.current?.projects?.views ?? {}
-      let id: string | null = null
-      if (url) for (const [pid, spec] of Object.entries(views)) { if (specHasIframeUrl(spec, url)) { id = pid; break } }
-      if (!id && splitStore.active && splitStore.spec?.id) id = splitStore.spec.id
-      if (!id) return
-      const entry: RailNavEntry = {
-        url: url ?? '',
-        title: typeof d.title === 'string' ? d.title : undefined,
-        items: d.items.map((it: any) => ({ id: String(it?.id ?? ''), label: String(it?.label ?? '') })).filter((it: RailNavItem) => it.id),
-        active: typeof d.active === 'string' ? d.active : undefined,
-        ts: Date.now(),
-      }
-      if (!entry.items.length) return
-      // 命中待切换页签 → 立刻回发给页面（页面监听 dsh-wt-set-tab），并清掉待办
-      const want = pendingRailTab[id]
-      if (want) {
-        try { (e.source as Window | null)?.postMessage({ type: 'dsh-wt-set-tab', id: want }, '*') } catch { /* 回发失败走 hash 兜底 */ }
-        delete pendingRailTab[id]
-      }
-      if (pendingOpenCfg[id]) {
-        try { (e.source as Window | null)?.postMessage({ type: 'dsh-wt-open-config' }, '*') } catch { /* 忽略 */ }
-        delete pendingOpenCfg[id]
-      }
-      setRailNavs((prev) => {
-        const old = prev[id as string]
-        if (old && old.url === entry.url && old.active === entry.active && JSON.stringify(old.items) === JSON.stringify(entry.items)) return prev
-        const next = { ...prev, [id as string]: entry }
-        saveRailNavs(next)
-        return next
-      })
-    }
-    window.addEventListener('message', onMsg)
-    return () => window.removeEventListener('message', onMsg)
-  }, [])
-
   /** 收起态点击项目图标：视图覆盖/布局 → openSplit；入驻无视图 → 切绑定对话 */
   const openRailProject = (id: string) => {
     const pr = projectsRef.current.projects
@@ -2951,195 +2574,8 @@ function buildCustomLayoutPrompt(req: string): string {
     }
   }
 
-  /** 二级菜单结构的权威来源是产物目录里的 .dsh-worktable/rail-nav.json；
-   *  这里在挂载/布局变化时预读，使「行内二级菜单」在页面还没上报时也可用（重启后立刻可见）；
-   *  页面上报只用来补 active（当前页）与真实 URL。 */
-  useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      const pr = projectsRef.current.projects
-      for (const l of pr.layouts) {
-        const url = artifactUrlIn(l)
-        const dir = url ? siteDirOf(url) : null
-        if (!dir) continue
-        const cfgPath = dir.replace(/[\\/]+$/, '') + '/.dsh-worktable/rail-nav.json'
-        try {
-          const r = await fetch('/api/worktable/file?path=' + encodeURIComponent(cfgPath), { cache: 'no-store' })
-          if (!r.ok) continue
-          const d: any = await r.json()
-          const items = Array.isArray(d?.items)
-            ? d.items.map((it: any) => ({ id: String(it?.id ?? ''), label: String(it?.label ?? '') })).filter((it: RailNavItem) => it.id)
-            : []
-          if (!items.length || cancelled) continue
-          const title = typeof d?.title === 'string' && d.title ? d.title : undefined
-          setRailNavs((prev) => {
-            const cur = prev[l.id]
-            if (cur && cur.title === (title ?? cur.title) && JSON.stringify(cur.items) === JSON.stringify(items)) return prev
-            const next = { ...prev, [l.id]: { url: cur?.url ?? '', title: title ?? cur?.title, items, active: cur?.active, ts: cur?.ts ?? Date.now() } }
-            saveRailNavs(next)
-            return next
-          })
-        } catch { /* 没有配置文件的项目跳过 */ }
-      }
-    }
-    void run()
-    return () => { cancelled = true }
-  }, [projects.layouts, projects.folders])
-
-  /** 收起态子菜单里的「配置二级菜单」：打开项目，等页面自报后再唤起它的配置界面 */
-  const openRailConfig = (id: string) => {
-    const pr = projectsRef.current.projects
-    const base = (pr.views[id] ?? pr.layouts.find((l) => l.id === id)) as LayoutSpec | undefined
-    if (!base) return
-    pendingOpenCfg[id] = true
-    openSplit(base)
-  }
-
-  /** 点二级菜单项：打开该项目并把承载产物的 iframe 切到指定页签（回发优先，hash 兜底） */
-  const openRailProjectTab = (id: string, tabId: string) => {
-    const entry = railNavs[id]
-    const pr = projectsRef.current.projects
-    const base = (pr.views[id] ?? pr.layouts.find((l) => l.id === id)) as LayoutSpec | undefined
-    if (!base) return
-    const url = entry?.url || artifactUrlIn(base) || ''
-    if (url) {
-      pendingRailTab[id] = tabId
-      const patched = specWithTabHash(base, url, tabId)
-      try { persistProjects((prev) => ({ ...prev, views: { ...prev.views, [id]: patched } })) } catch { /* 持久化失败仍可打开 */ }
-      openSplit(patched)
-      let tries = 6
-      const apply = () => {
-        if (applyTabHashToFrame(url, tabId)) return
-        if (tries-- > 0) window.setTimeout(apply, 280)
-      }
-      apply()
-      return
-    }
-    openSplit(base)
-  }
-
-  if (!wide) {
-    // 收起态 = 等行高的正方形圆角按钮，中间只留 emoji；点击 = 进入对应项目
-    const railItems: { icon: string; name: string; onClick: (e: any) => void }[] = [
-      { icon: CONSOLE_ICON, name: t('console.name'), onClick: (e) => clickConsoleCard(e.currentTarget as HTMLElement) },
-      ...aliveRegisteredIds.map((id) => ({
-        icon: projects.iconOverrides[id] ?? metas[id]?.icon ?? '📦',
-        name: projects.nameOverrides[id] ?? metas[id]?.name ?? id,
-        onClick: () => openRailProject(id),
-      })),
-      ...projects.shortcuts.map((s) => ({
-        icon: s.icon,
-        name: s.name,
-        onClick: () => { try { window.open(s.href, '_blank', 'noopener') } catch {} },
-      })),
-      ...projects.layouts.map((l) => ({
-        icon: l.icon ?? '🧱',
-        name: projects.nameOverrides[l.id] ?? l.title,
-        onClick: () => openSplit(l),
-      })),
-    ]
-    // 浮动态：fixed 定位到拖前高度（左/宽取折叠列实测几何）；停靠态：文档流原位
-    const railStyle = isFloat && railRect
-      ? { position: 'fixed' as const, top: float.top, left: railRect.left, width: railRect.width, zIndex: 70 }
-      : bottomInset > 0 ? { marginBottom: bottomInset } : undefined
-    return (
-      <div ref={rootRef} className="dsh-wt_section dsh-wt_rail" style={railStyle}>
-        <div className="dsh-wt_divider" />
-        <div className="dsh-wt_railBox">
-          {railItems.length > 0
-            ? railItems.map((it, i) => (
-                <button key={i} type="button" className="dsh-wt_railBtn" title={it.name} aria-label={it.name} onClick={it.onClick}>
-                  <span aria-hidden>{it.icon}</span>
-                </button>
-              ))
-            : <span className="dsh-wt_railIcon">≡</span>}
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div ref={rootRef} className={'dsh-wt_section' + (isFloat ? ' dsh-wt_float' : '')} style={isFloat ? floatStyle : dockedStyle}>
-      <div className="dsh-wt_divider" />
-      <div className="dsh-wt_header">
-        <button
-          type="button"
-          className="dsh-wt_handle"
-          data-float={isFloat ? 'true' : 'false'}
-          title={t('handle.title')}
-          aria-label={t('handle.aria')}
-          onPointerDown={onHandlePointerDown}
-          onPointerMove={onHandlePointerMove}
-          onPointerUp={onHandlePointerUp}
-          onPointerCancel={onHandlePointerUp}
-          onDoubleClick={resetDock}
-        >≡</button>
-        <span
-          className="dsh-wt_title"
-          title={t('handle.title')}
-          onPointerDown={onHandlePointerDown}
-          onPointerMove={onHandlePointerMove}
-          onPointerUp={onHandlePointerUp}
-          onPointerCancel={onHandlePointerUp}
-          onDoubleClick={resetDock}
-        >{t('title')}</span>
-        {updateInfo && (
-          <button
-            type="button"
-            className="dsh-wt_updateBadge"
-            title={t('update.badgeTitle') + ' · v' + updateInfo.latest}
-            aria-label={t('update.badgeTitle')}
-            onClick={() => setViewOptionsOpen(true)}
-          >{ICON_SYNC}</button>
-        )}
-        <div className="dsh-wt_actions">
-          <button
-            type="button"
-            className="dsh-wt_iconBtn"
-            aria-label={t('menu.search')}
-            title={t('menu.search')}
-            onClick={() => persistView({ searchOpen: !view.searchOpen, query: view.searchOpen ? '' : view.query })}
-          >{ICON_SEARCH}</button>
-          <button
-            type="button"
-            className="dsh-wt_iconBtn"
-            aria-label={t('menu.viewOptions')}
-            title={t('menu.viewOptions')}
-            onClick={() => { invalidatePickState(); setViewOptionsOpen((v) => !v); setAddOpen(false) }}
-          >{ICON_VIEW_OPTIONS}</button>
-          <button
-            type="button"
-            className="dsh-wt_iconBtn"
-            aria-label={t('menu.add')}
-            title={t('menu.add')}
-            onClick={() => {
-              invalidatePickState()
-              setAddOpen((v) => !v); setViewOptionsOpen(false)
-              // 父目录默认 = 当前会话工作目录（不落 C 盘默认位置）
-              if (!wsFolderParent) {
-                const cwd = sessionScopeStore.snapshot?.cwd ?? ''
-                if (cwd) setWsFolderParent(cwd)
-              }
-            }}
-          >{ICON_ADD}</button>
-        </div>
-      </div>
-
-      {view.searchOpen && (
-        <div className="dsh-wt_search">
-          <input
-            autoFocus
-            type="text"
-            placeholder={t('search.placeholder')}
-            value={view.query}
-            onChange={(e) => persistView({ query: e.target.value })}
-            onKeyDown={onSearchKeyDown}
-          />
-          <button type="button" className="dsh-wt_searchClear" aria-label={t('search.close')}
-            onClick={() => persistView({ searchOpen: false, query: '' })}>✕</button>
-        </div>
-      )}
-
+  const popupLayer = (
+    <>
       {addOpen && <div className="dsh-wt_popBackdrop" onClick={() => { invalidatePickState(); setAddOpen(false) }} />}
       {addOpen && (
         <div className="dsh-wt_menu dsh-wt_add dsh-wt_pop" style={{ position: 'fixed', left: popLeft, top: popTop, width: 360, zIndex: 80 }}>
@@ -3251,46 +2687,6 @@ function buildCustomLayoutPrompt(req: string): string {
               <div className="dsh-wt_updateHint">{t(DESKTOP_HOST ? 'update.upgradeHintDesktop' : 'update.upgradeHint')}</div>
             </div>
           )}
-          <div className="dsh-wt_cloudCard">
-            <div className="dsh-wt_manageHead">
-              <span className="dsh-wt_manageTitle">{t('cloud.title')}</span>
-            </div>
-            <div className="dsh-wt_cloudState">
-              {cloudMeta && cloudMeta.path
-                ? <>
-                    {cloudMeta.updatedAt
-                      ? t('cloud.snapshot', { time: String(cloudMeta.updatedAt).replace('T', ' ').slice(0, 16) })
-                      : t('cloud.snapshotUnknown')}
-                    {' · '}{cloudMeta.layouts} {t('cloud.layouts')}
-                    {cloudMeta.history > 0 ? ' · ' + t('cloud.history', { n: String(cloudMeta.history) }) : ''}
-                  </>
-                : t('cloud.notConfigured')}
-            </div>
-            <div className="dsh-wt_cloudBtns">
-              <button type="button" className="dsh-wt_cloudBtn" disabled={cloudBusy !== ''} onClick={() => void cloudRestoreNow()}>
-                {cloudBusy === 'restore' ? t('cloud.restoring') : t('cloud.restore')}
-              </button>
-              <button type="button" className="dsh-wt_cloudBtn" disabled={cloudBusy !== '' || !cloudStatePath} onClick={() => void cloudPushNow()}>
-                {cloudBusy === 'push' ? t('cloud.pushing') : t('cloud.push')}
-              </button>
-            </div>
-            <div className="dsh-wt_cloudBtns">
-              <button
-                type="button"
-                className="dsh-wt_cloudBtn"
-                disabled={cloudBusy !== '' || !cloudStatePath || !(cloudMeta && cloudMeta.history > 0)}
-                title={t('cloud.rollbackHint')}
-                onClick={() => void cloudRollbackNow()}
-              >
-                {cloudBusy === 'rollback' ? t('cloud.rolling') : t('cloud.rollback')}
-              </button>
-            </div>
-            {cloudStatus && <div className="dsh-wt_cloudHint">{cloudStatus}</div>}
-            {cloudLastPushError && !cloudStatus && (
-              <div className="dsh-wt_cloudWarn">{t('cloud.pushFailed')}{cloudLastPushError}</div>
-            )}
-            <div className="dsh-wt_cloudNote">{t('cloud.note')}</div>
-          </div>
           <div className="dsh-wt_manageHead">
             <span className="dsh-wt_manageTitle">{t('sort.label')}</span>
           </div>
@@ -3606,6 +3002,169 @@ function buildCustomLayoutPrompt(req: string): string {
         </div>
       )}
 
+    </>
+  )
+
+  if (!wide) {
+    // 收起态 = 等行高的正方形圆角按钮，中间只留 emoji；点击 = 进入对应项目
+    const railItems: { icon: string; name: string; onClick: (e: any) => void }[] = [
+      { icon: CONSOLE_ICON, name: t('console.name'), onClick: (e) => clickConsoleCard(e.currentTarget as HTMLElement) },
+      ...aliveRegisteredIds.map((id) => ({
+        icon: projects.iconOverrides[id] ?? metas[id]?.icon ?? '📦',
+        name: projects.nameOverrides[id] ?? metas[id]?.name ?? id,
+        onClick: () => openRailProject(id),
+      })),
+      ...projects.shortcuts.map((s) => ({
+        icon: s.icon,
+        name: s.name,
+        onClick: () => { try { window.open(s.href, '_blank', 'noopener') } catch {} },
+      })),
+      ...projects.layouts.map((l) => ({
+        icon: l.icon ?? '🧱',
+        name: projects.nameOverrides[l.id] ?? l.title,
+        onClick: () => openSplit(l),
+      })),
+    ]
+    // REQ-20261117-0013：收起态 rail 只平铺前 RAIL_MAX 个，其余进「⋯」菜单。
+    // 控制室永远保留在第一位（它是唯一的固定入口），被挤出去的按原顺序进菜单。
+    const RAIL_MAX = 8
+    const railShown = railItems.slice(0, RAIL_MAX)
+    const railOverflow = railItems.slice(RAIL_MAX)
+    // 浮动态：fixed 定位到拖前高度（左/宽取折叠列实测几何）；停靠态：文档流原位
+    const railStyle = isFloat && railRect
+      ? { position: 'fixed' as const, top: float.top, left: railRect.left, width: railRect.width, zIndex: 70 }
+      : bottomInset > 0 ? { marginBottom: bottomInset } : undefined
+    return (
+      <>
+      <div ref={rootRef} className="dsh-wt_section dsh-wt_rail" style={railStyle}>
+        <div className="dsh-wt_divider" />
+        <div className="dsh-wt_railBox">
+          {railItems.length > 0
+            ? railShown.map((it, i) => (
+                <button key={i} type="button" className="dsh-wt_railBtn" title={it.name} aria-label={it.name} onClick={it.onClick}>
+                  <span aria-hidden>{it.icon}</span>
+                </button>
+              ))
+            : <span className="dsh-wt_railIcon">≡</span>}
+          {railOverflow.length > 0 && (
+            <button
+              type="button"
+              className={'dsh-wt_railBtn dsh-wt_railMore' + (railMoreOpen ? ' dsh-wt_railMoreOn' : '')}
+              title={t('rail.more') + '（' + railOverflow.length + '）'}
+              aria-label={t('rail.more')}
+              aria-expanded={railMoreOpen}
+              onClick={() => setRailMoreOpen((v) => !v)}
+            >
+              <span aria-hidden>⋯</span>
+            </button>
+          )}
+        </div>
+        {railMoreOpen && railOverflow.length > 0 && (
+          <div className="dsh-wt_railMenu" role="menu">
+            {railOverflow.map((it, i) => (
+              <button
+                key={i}
+                type="button"
+                role="menuitem"
+                className="dsh-wt_railMenuItem"
+                title={it.name}
+                onClick={(e) => { setRailMoreOpen(false); it.onClick(e) }}
+              >
+                <span className="dsh-wt_railMenuIcon" aria-hidden>{it.icon}</span>
+                <span className="dsh-wt_railMenuName">{it.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {popupLayer}
+      </>
+    )
+  }
+
+  return (
+    <div ref={rootRef} className={'dsh-wt_section' + (isFloat ? ' dsh-wt_float' : '')} style={isFloat ? floatStyle : dockedStyle}>
+      <div className="dsh-wt_divider" />
+      <div className="dsh-wt_header">
+        <button
+          type="button"
+          className="dsh-wt_handle"
+          data-float={isFloat ? 'true' : 'false'}
+          title={t('handle.title')}
+          aria-label={t('handle.aria')}
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onPointerCancel={onHandlePointerUp}
+          onDoubleClick={resetDock}
+        >≡</button>
+        <span
+          className="dsh-wt_title"
+          title={t('handle.title')}
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onPointerCancel={onHandlePointerUp}
+          onDoubleClick={resetDock}
+        >{t('title')}</span>
+        {updateInfo && (
+          <button
+            type="button"
+            className="dsh-wt_updateBadge"
+            title={t('update.badgeTitle') + ' · v' + updateInfo.latest}
+            aria-label={t('update.badgeTitle')}
+            onClick={() => setViewOptionsOpen(true)}
+          >{ICON_SYNC}</button>
+        )}
+        <div className="dsh-wt_actions">
+          <button
+            type="button"
+            className="dsh-wt_iconBtn"
+            aria-label={t('menu.search')}
+            title={t('menu.search')}
+            onClick={() => persistView({ searchOpen: !view.searchOpen, query: view.searchOpen ? '' : view.query })}
+          >{ICON_SEARCH}</button>
+          <button
+            type="button"
+            className="dsh-wt_iconBtn"
+            aria-label={t('menu.viewOptions')}
+            title={t('menu.viewOptions')}
+            onClick={() => { invalidatePickState(); setViewOptionsOpen((v) => !v); setAddOpen(false) }}
+          >{ICON_VIEW_OPTIONS}</button>
+          <button
+            type="button"
+            className="dsh-wt_iconBtn"
+            aria-label={t('menu.add')}
+            title={t('menu.add')}
+            onClick={() => {
+              invalidatePickState()
+              setAddOpen((v) => !v); setViewOptionsOpen(false)
+              // 父目录默认 = 当前会话工作目录（不落 C 盘默认位置）
+              if (!wsFolderParent) {
+                const cwd = sessionScopeStore.snapshot?.cwd ?? ''
+                if (cwd) setWsFolderParent(cwd)
+              }
+            }}
+          >{ICON_ADD}</button>
+        </div>
+      </div>
+
+      {view.searchOpen && (
+        <div className="dsh-wt_search">
+          <input
+            autoFocus
+            type="text"
+            placeholder={t('search.placeholder')}
+            value={view.query}
+            onChange={(e) => persistView({ query: e.target.value })}
+            onKeyDown={onSearchKeyDown}
+          />
+          <button type="button" className="dsh-wt_searchClear" aria-label={t('search.close')}
+            onClick={() => persistView({ searchOpen: false, query: '' })}>✕</button>
+        </div>
+      )}
+
+      {popupLayer}
       <div className="dsh-wt_projects" data-managing={viewOptionsOpen ? 'true' : undefined}>
         {/* 「工作台」控制室项目：固定首位、不可删除；未绑定点开 = 强制绑定弹窗 */}
         <button
@@ -3639,74 +3198,37 @@ function buildCustomLayoutPrompt(req: string): string {
           ? renderProjectSlot('sidebar.worktable.project', ownerProps)
           : <div className="dsh-wt_empty">{t('empty')}</div>}
         {visibleLayouts.map((l) => (
-          (() => {
-            // 方案 B：有二级导航的项目 → 行内展开；没有的保持原行为（直接打开）
-            const nav = railNavs[l.id]
-            const hasNav = !!nav?.items?.length
-            const subOpen = hasNav && openSubId === l.id
-            return (
-              <div key={l.id} className="dsh-wt_layoutWrap" style={{ order: effectiveOrder.indexOf(l.id) + 1000 }}>
-                <button
-                  type="button"
-                  className={'dsh-wt_layout' + (hasNav ? ' dsh-wt_layoutHasNav' : '')}
-                  data-on={activeSplitId === l.id ? 'true' : 'false'}
-                  data-sub={hasNav ? (subOpen ? 'true' : 'false') : undefined}
-                  aria-expanded={hasNav ? String(subOpen) : undefined}
-                  aria-haspopup={hasNav ? 'menu' : undefined}
-                  style={{ position: 'relative', width: '100%' }}
-                  title={hasNav ? (projects.nameOverrides[l.id] ?? l.title) + ' · ' + t('rail.subHint') : undefined}
-                  onClick={() => {
-                    if (hasNav) { setOpenSubId(subOpen ? null : l.id); return }
-                    openSplit(l); reportUsed(l.id)
-                  }}
-                  onDoubleClick={() => { if (hasNav) { setOpenSubId(null); openRailProject(l.id) } }}
-                >
-                  <span
-                    className="dsh-wt_layoutIcon dsh-wt_iconPick"
-                    role="button"
-                    tabIndex={0}
-                    title={t('icons.change')}
-                    onClick={(e) => { e.stopPropagation(); openIconPick('layout', l.id, e.currentTarget as HTMLElement) }}
-                  >{l.icon ?? '🧱'}</span>
-                  <span className="dsh-wt_layoutText">
-                    <span className="dsh-wt_layoutName">{projects.nameOverrides[l.id] ?? l.title}</span>
-                  </span>
-                  <span
-                    className={'dsh-wt_bindBtn'}
-                    role="button"
-                    tabIndex={0}
-                    data-bound={bindNotifyMap[l.id] ?? (projects.bindings[l.id] ? 'true' : 'false')}
-                    data-tip={projects.bindings[l.id]
-                      ? t('bind.tipBound', { name: boundSessionTitle(projects.bindings[l.id]) }) + (bindNotifyMap[l.id] === 'busy' ? t('bind.tipBusy') : bindNotifyMap[l.id] === 'done' ? t('bind.tipDone') : bindNotifyMap[l.id] === 'need' ? t('bind.tipNeed') : '')
-                      : t('bind.tipUnbound')}
-                    aria-label={projects.bindings[l.id] ? t('bind.tipBound', { name: boundSessionTitle(projects.bindings[l.id]) }) : t('bind.tipUnbound')}
-                    onClick={(e) => { e.stopPropagation(); openBindPick(l.id, e.currentTarget as HTMLElement) }}
-                  ><span className="dsh-wt_bindCircles" aria-hidden /></span>
-                  {hasNav
-                    ? <span className="dsh-wt_subChevron" aria-hidden>›</span>
-                    : <span className="dsh-wt_layoutArrow" aria-hidden>›</span>}
-                </button>
-                {subOpen && (
-                  <div className="dsh-wt_subNav" role="menu">
-                    <div className="dsh-wt_subNavHead">{nav.title ?? t('title')}</div>
-                    {nav.items.map((it) => (
-                      <button
-                        key={it.id}
-                        type="button"
-                        role="menuitem"
-                        className="dsh-wt_subNavItem"
-                        data-on={nav.active === it.id ? 'true' : 'false'}
-                        onClick={() => openRailProjectTab(l.id, it.id)}
-                      >{it.label}</button>
-                    ))}
-                    <div className="dsh-wt_subNavSep" aria-hidden />
-                    <button type="button" role="menuitem" className="dsh-wt_subNavItem dsh-wt_subNavCfg" onClick={() => openRailConfig(l.id)}>{t('rail.configure')}</button>
-                    <button type="button" role="menuitem" className="dsh-wt_subNavItem dsh-wt_subNavCfg" onClick={() => { setOpenSubId(null); openRailProject(l.id) }}>{t('rail.openLayout')}</button>
-                  </div>
-                )}
-              </div>
-            )
-          })()
+          <button
+            key={l.id}
+            type="button"
+            className="dsh-wt_layout"
+            data-on={activeSplitId === l.id ? 'true' : 'false'}
+            style={{ order: effectiveOrder.indexOf(l.id) + 1000, position: 'relative' }}
+            onClick={() => { openSplit(l); reportUsed(l.id) }}
+          >
+            <span
+              className="dsh-wt_layoutIcon dsh-wt_iconPick"
+              role="button"
+              tabIndex={0}
+              title={t('icons.change')}
+              onClick={(e) => { e.stopPropagation(); openIconPick('layout', l.id, e.currentTarget as HTMLElement) }}
+            >{l.icon ?? '🧱'}</span>
+            <span className="dsh-wt_layoutText">
+              <span className="dsh-wt_layoutName">{projects.nameOverrides[l.id] ?? l.title}</span>
+            </span>
+            <span
+              className={'dsh-wt_bindBtn'}
+              role="button"
+              tabIndex={0}
+              data-bound={bindNotifyMap[l.id] ?? (projects.bindings[l.id] ? 'true' : 'false')}
+              data-tip={projects.bindings[l.id]
+                ? t('bind.tipBound', { name: boundSessionTitle(projects.bindings[l.id]) }) + (bindNotifyMap[l.id] === 'busy' ? t('bind.tipBusy') : bindNotifyMap[l.id] === 'done' ? t('bind.tipDone') : bindNotifyMap[l.id] === 'need' ? t('bind.tipNeed') : '')
+                : t('bind.tipUnbound')}
+              aria-label={projects.bindings[l.id] ? t('bind.tipBound', { name: boundSessionTitle(projects.bindings[l.id]) }) : t('bind.tipUnbound')}
+              onClick={(e) => { e.stopPropagation(); openBindPick(l.id, e.currentTarget as HTMLElement) }}
+            ><span className="dsh-wt_bindCircles" aria-hidden /></span>
+            <span className="dsh-wt_layoutArrow" aria-hidden>›</span>
+          </button>
         ))}
       </div>
 

@@ -3,7 +3,7 @@
 > 版本：v0.2 草案 · 日期：2026-08-16 · 状态：v2 已实现并验收；§12 多项目分栏框架（v3）与 §13 乐高式工作区框架（v4）设计定案、待实现
 > 关联项目：dsh-travelatlas（第一个入驻项目）、上游参考 dsh-reminder（文件夹结构）
 
-> 文档边界：§3/§9–§13 包含早期目标、历史验收表与设计草案，不是当前版本全部实现的规格书。当前 v0.4.0 的安装、兼容与验证状态以 README / 包内 README 为准；§6/§8 为当前架构与权限说明。
+> 文档边界：§3/§9–§13 包含早期目标、历史验收表与设计草案，不是当前版本全部实现的规格书。当前 0.5.1的安装、兼容与验证状态以 README / 包内 README 为准；§6/§8 为当前架构与权限说明。
 
 ## 1. 项目定位
 
@@ -155,10 +155,12 @@ ctx.slots.register({
   package.json `dsh.client.inject` 声明 `@deepseek-ai/dsh-client-locale`（peerDependencies 可选）。
 - 宿主 locale 服务缺席时 t 回退 zh 词典，保证工作台独立可用。
 
+当前侧栏的添加、绑定、图标、删除弹窗由同一份 `popupLayer` 渲染，展开/收起分支各引用一次；避免折叠时入口更新状态但没有弹窗，或展开时双重弹窗。选择器失效/卸载守卫保持原有语义。
+
 ## 6. 架构与技术方案
 
 - 插件包：`01_content/`（dsh.plugin.json + cordis.patch.yml + build.mjs，参照 dsh-travelatlas / dsh-usage）；
-- 服务端：Cordis 插件，`inject: ['webServer','sessions']`；`/api/worktable/*` 包含 health、fs、git、file、write、site、mkdir、workspaces、template 等业务路由，`/api/worktable/term` 为终端 WebSocket。数据目录由官方 home-paths（可解析时）或无循环 baseDshHome 兜底定位，不写死 ~/.dsh。
+- 服务端：Cordis 插件，`inject: ['webServer','sessions']`；`/api/worktable/*` 包含 health、fs、git、file、write、site、mkdir、workspaces、template、preview、preview-static 等路由，`/api/worktable/term` 为终端 WebSocket。数据目录由官方 home-paths（可解析时）或无循环 baseDshHome 兜底定位，不写死 ~/.dsh。
 - 客户端：单文件 CJS（`window.__ModuleLoader__.load` 握手），external react / @deepseek-ai/*；
   - 注入座位：`sidebar.footer.action`（order 20，位于 dsh-usage 之后）；
   - 服务注入：`['slots','locale','sessions','conversation','workspaces']`；新版可选服务经 `ctx.get` 探测，缺席时保留旧版分支；locale 缺席回退 zh。Desktop 的 platform 仍为 web，终端地址经 `hostTransport.ts` 从宿主 transport 取得。
@@ -202,6 +204,8 @@ ctx.slots.register({
 
 ## 8. 隐私与安全
 
+- 当前候选私有 HTTP 与终端握手借宿主 `connection.admit` 验证身份：新版仅 owner，0.2.0 仅同一 operator；不可确认身份时拒绝。health 公开，preview-static 使用 owner 创建的临时只读能力地址。路由、错误码、生命周期及排查统一见 [兼容与安全说明](../docs/compatibility-and-security.md)。
+- browser/anim/iframe 使用不含 allow-same-origin 的 sandbox。本地网页先创建 preview 挂载，再经 preview-static 读取资源；CORS 不授予私有接口权限，网页仍可外连。存储、登录、WebGL 和自动取字可能受影响；StarMap 月球纹理已在独立项目修复，不包含在工作台包中；不放宽隔离规避旧网页兼容问题。
 - 不新增分析上报服务；项目/布局/绑定存 localStorage，媒体存 IndexedDB，网页与桌面来源各自独立。搜索在本机过滤项目名。
 - 文件窗、编辑保存、mkdir、站点与 widget 产物握手会读写配置的项目目录；workspaces 路由读取宿主工作区数据，部分读取由加载/项目变化/会话完成自动触发。
 - 更新检查为可关闭的 GitHub Releases 只读 GET，不携带会话内容；其余通信包括宿主 API/WebSocket 与网页窗加载内容自身的请求。不能概括为「不联网」。
@@ -289,7 +293,7 @@ type SplitPane = {
   title: string
   width: { default: number; min: number; max: number }
   content:
-    | { kind: 'iframe'; url: string }          // 主推：同源站点路由（/xxx/site/）
+    | { kind: 'iframe'; url: string }          // URL 形式；当前候选仍使用隔离 iframe，不继承宿主同源权限
     | { kind: 'component'; component: any }    // 预留：项目打包的 React 组件（实现时验证跨插件引用可行性）
 }
 ```
@@ -309,8 +313,7 @@ type SplitPane = {
 - 对话栏：固定最右，可拖宽范围 = 240 起、上限为「列宽 − 左侧内容最小宽」（参考实现取 160px，
   与 travelatlas 现行语义一致；不再设固定 480 上限）；
 - 持久化：`dsh.worktable.split.v1` = `{ [projectId]: { [paneId]: width, chat: width } }`；
-- iframe 内容：同源路由约定 `/<project>/site/`（项目服务端自行托管，travelatlas 模式），
-  URL 校验 http/https，新标签打开入口同 travelatlas；
+- iframe 内容：早期设计使用 `/<project>/site/` 路由；当前候选使用隔离页面，即使 URL 与宿主同站也不授予同源权限。本地 HTML 通过只读预览地址加载，限制见 §8。
 - 内容形式：`iframe` 为主；`component` 预留位，待深度交互项目出现时验证并实现。
 
 ### 12.5 实施时机
@@ -351,7 +354,7 @@ type SplitPane = {
 
 ### 13.4 内容插件协议 PaneProvider
 
-- 内容三态：`iframe`（同源 URL，主推）/ `component`（插件打包 React 组件）/ `builtin`（工作台内置）；
+- 内容三态：`iframe`（URL 页面，当前加 sandbox 隔离）/ `component`（插件打包 React 组件）/ `builtin`（工作台内置）；
 - builtin 注册表：工作台内置「浏览器」；资源管理器 / 终端 / 任务管理作为后续内容插件逐个接入；
 - 内容插件 = 独立 DSH 插件包，经专用座位或注册表挂载，不硬编码进工作台本体。
 
@@ -381,8 +384,8 @@ type SplitPane = {
   分组、与发送到会话同源），绑定后打开该项目时右侧对话窗自动切换（sessions.open）；解绑即
   不再切换；绑定关系存 projects.v1.bindings（项目 id → 会话 id）。
 - **任务完成/待决提醒镜像**（2026-08-18）：绑定会话在宿主快照 byId 里 completed=true → 项目卡
-  双圆点绿色发光（data-bound=done）；pendingInteraction != null → 黄色发光（data-bound=need），
-  与原生对话小绿点/小黄点同步；点开项目即确认（ack，notifyAck.v1 按会话存状态）恢复常态实心；
+  双圆点中性发光（data-bound=done，仅表示本轮结束）；pendingInteraction != null → 黄色发光（data-bound=need），
+  仅同步宿主结束/待决提醒，不把结束视为成功；点开项目即确认（ack，notifyAck.v1 按会话存状态）恢复常态实心；
   状态切换（完成↔待决）会重新点亮；新版 pending key/kind 或待决子会话集合变化也重新点亮。
   控制室计时只读后台任务或新版 chat.legacy.turnTimings / 旧会话面，未知起点不虚构时长。
   数据源 sessionsSnapshotStore（syncSessionScope 推送完整
@@ -418,7 +421,7 @@ type SplitPane = {
 | 内容窗 | 可行性 | 依据 |
 | --- | --- | --- |
 | 浏览器 | ✅ 已实现 | iframe + 地址栏 |
-| 资源管理器 | ✅ 已实现（第一版） | 服务端 /api/worktable/fs 目录列表（参考 better-sidebar 架构）；文件点击开预览标签（2026-08-17）：.html → /api/worktable/site 目录级静态托管（相对资源随目录解析，本地网页完整渲染；PDF 已回退原生 iframe 阅读器）、.md markdown-it 渲染、.txt/.log 纯文本、常见图片居中展示 |
+| 资源管理器 | ✅ 已实现（第一版） | 服务端 /api/worktable/fs 目录列表（参考 better-sidebar 架构）；文件点击开预览标签（2026-08-17）：.html → 鉴权创建 preview 挂载后经 preview-static 读取相对资源（早期使用 site）；隔离兼容限制见 §8，PDF 仍走现有阅读器、.md markdown-it 渲染、.txt/.log 纯文本、常见图片居中展示 |
 | 源代码管理 | ✅ 已实现（第一版） | 服务端 /api/worktable/git（porcelain v1 -z）；diff/暂存/提交待后续 |
 | 终端 | ✅ 已实现（第一版） | WS /api/worktable/term + node-pty + xterm（宿主缺 node-pty 时降级提示） |
 | 任务管理 | ✅ 已实现（第一版） | 客户端 sessions 快照 jobsBySession（后台任务列表，2s 刷新） |
@@ -451,7 +454,7 @@ type SplitPane = {
   用户自建布局 = 同一引擎的运行时产物，共用 tiling 引擎与持久化；
 - 本地快捷方式、接入指引保留于「+」面板第二入口。
 
-## 14. 当前实现参考（由规则手册迁入，v0.4.0）
+## 14. 当前实现参考（0.5.1）
 
 以下为界面、状态与产物协议的实现细节，供改动对应组件时对照源码；约束与验证入口见 AGENTS.md，发布状态见 README。0.2 导航使用 openHostSession，新旧 API 桥接见 sessionCompat.ts/sessionDetails.ts；不要将旧接口示例当作通用公开 API。
 
@@ -510,7 +513,7 @@ type SplitPane = {
   参考模板。新增组件样式只加到 dshell.css，保持单一来源。
 
 - **任务完成/待决提醒镜像**：绑定会话在宿主快照 byId 里 completed=true → 项目卡双圆点变
-  绿色发光（data-bound=done）；pendingInteraction != null → 黄色发光（data-bound=need）；
+  中性发光（data-bound=done，仅表示本轮结束）；pendingInteraction != null → 黄色发光（data-bound=need）；
   点开项目 = ack（notifyAck.v1 按会话存状态）恢复常态实心。数据源 = sessionsSnapshotStore
   （syncSessionScope 写入完整快照并通知监听者）；跨状态（done↔need）会重新点亮。
   **工作中（busy）**：byId[sid].running === true → data-bound=busy，蓝色 #4f8ef7 发光 +
@@ -532,7 +535,7 @@ type SplitPane = {
     未绑定 → 强制绑定弹窗（左「加入现有对话」列表 / 右「新建对话」：分组 无/现有/新建，
     仅在宿主允许且用户分组选择有效时创建空会话并绑定；DSH 0.2 未分组空会话提示并禁用创建，不改组、不发激活消息）。绑定也走 projects.v1.bindings。
   - 控制室面板（split.tsx ConsolePane）：卡片网格每行 3 张、超出换行；每卡 = 图标/名称/
-    状态大字与三色光效（need>done>busy>idle，不过滤 ack，永远显示事实状态）/运行时长
+    状态大字与提醒光效（need>busy>done>idle，不过滤 ack；done 只表示本轮结束，不表示成功）/运行时长
     （后台任务 JobView.startedAt → 新版 uiConversation 的 chat.legacy.turnTimings → 旧会话面，
     未加载/无起点不显示时长；不为计时激活 chat 或持有冷会话）/最近消息预览。数据组装
     = index.tsx getConsoleCards（env.console 注入），刷新走 consoleListeners（项目/会话
@@ -547,7 +550,7 @@ type SplitPane = {
   - 状态光效（整卡霓虹描边，参考侧栏双圆点发光质感）：工作=蓝色彗星式光点顺时针绕卡旋转
     （.dsh-wt_consoleCard-busy ::before conic-gradient + @property --consoleAngle +
     consoleAngleSpin；环 inset -4/padding 4、高亮段 #dcebff→#9cc6ff、filter drop-shadow
-    rgba(140,190,255,.85) 光点自带辉光、外发光双层 10px+34px）；完成=绿光、待决=黄光
+    rgba(140,190,255,.85) 光点自带辉光、外发光双层 10px+34px）；本轮结束=中性光、待决=黄光
     （-glowDone/-glowNeed：亮色描边 + 双层外发光 + 微弱内辉光；glow 字段 = done/need 且
     本轮未 ack，点卡片先 onAck 熄光再进入，与提醒 ack 生命周期一致）。
   - 命名：侧栏区块标题 = 「工作台」（title locale，整个插件）；默认项目卡名与面板标题 =
@@ -572,15 +575,14 @@ type SplitPane = {
     新版本横幅=复制升级指令（点击变绿并提示「请在任意对话中发送」）/查看发布页（蓝 hover）/忽略此版本（红 hover）+
     CHANGELOG_V030 正文（changelog.ts 纯文本，不做 md 渲染）；
     检查核心 = updateCheck.ts（updateCache.v1 缓存，与设置面板旧更新卡共用 lastUpdateCheck/skipVersion/updateCheck 键，
-    旧卡暂保留未去重）；铃铛按钮发现新版本时右上角琥珀呼吸灯（dockBadge）。
+    两处请求循环暂保留，版本排序/候选过滤统一用 updateCheck.ts；缓存重验 latest>本机且未忽略，非新版/失败清旧提示，避免降级提醒）；铃铛按钮确有更高版本时右上角琥珀呼吸灯（dockBadge）。
   - 指哪打哪标注：窗格折叠键旁 annotBtn——蓝泡光标→点选/拖框（小拖=点）→输入→✓ 注入宿主 textarea（不发送，失败回退剪贴板）。
     payload v3.2：窗口身份（编号+窗格标题+内容类型/URL）+ 主目标（caretPositionFromPoint 取字 + computed style 字号）+ 整行 + 候选；
-    同源 iframe 下钻取字（boxPayload），跨域输出「读取受限」+ src；提示词含「禁止编造，缺失时如实说明，建议截图或视觉模型」；
+    隔离 iframe 下钻取字被浏览器拒绝时输出「读取受限」+ src，保留窗口级信息；不能取消 sandbox 恢复取字。提示词含「禁止编造，缺失时如实说明，建议截图或视觉模型」；
     知识包含标注协议行（窗口编号+处理方式）；回退锚点 tag：pre-annotate-v3 / pre-annotate-v3.1 / pre-annotate-v3.2。
   - 分隔线：DIVIDER=4（分栏可拖分隔条更细）。
   - 冷会话消息预览：0.2 用 sessions.using 临时持有后读 eventSource 的已加载事件窗口；旧版预热走 face.history({maxMessages:6})
-    （旧版运行期内建方法、非公开接口）；尾部扫 user/message 与 assistant/message 的
-    text 块 → cleanPreviewText（滤除 ```围栏与行内代码、压缩空白；不足 8 字符回退更早消息）→
+    （旧版运行期内建方法、非公开接口）；尾部仅扫 assistant/message 的 text 块，排除事件根 surfaceOp 明确非 append 的模型替换副本 → cleanPreviewText（滤除 ```围栏与行内代码、压缩空白；短答复保留，纯代码回退更早助手文本，无答复留空）→
     previewCache；sweepPreviews 在打开控制室时 + 控制室开着且会话快照变化防抖 6s 触发；
     失败静默回退缓存/内存路径 lastTextOf；预热期间不因自身 retain/release 排入新一轮。拉取是带宽成本不是 Token 成本。
   - 状态指示：卡片右上角小圆点已删（整卡光效表达状态）；状态计算不变。

@@ -1,13 +1,41 @@
 /* dsh-worktable 原生皮肤 · DSH 设计系统组件库
    用法：<link rel="stylesheet" href="/api/worktable/template/dshell.css">
-   所有颜色走 DSH 主题变量（--dsw-alias-*），自动适配明暗主题。 */
-:root { color-scheme: dark; }
+   颜色一律走 DSH 主题变量（--dsw-alias-*），自动适配明暗主题。
+   主题来源优先级：
+     1) 工作台内：主题桥（站点路由自动注入，或显式引 /api/worktable/template/theme.js）
+        把宿主 body 上的 --dsw-*/--dsh-*/--ds-* 镜像成页面内联样式 → 跟随 DSH 的 浅色/深色/跟随系统；
+     2) 独立打开：用下面 :root 的兜底，并按系统深浅色切换。
+   注意：不要在这里写死深色（旧版 :root{color-scheme:dark} 会让所有页面锁死深色，
+   2026-11 从 0.5.x 线恢复时再次踩到，REQ-20261117-0013 一并修掉）。 */
+:root {
+  color-scheme: light dark;
+  --dsw-alias-bg-base: #ffffff;
+  --dsw-alias-fill-l1: rgba(16, 24, 40, .03);
+  --dsw-alias-border-l1: #e4e7ec;
+  --dsw-alias-border-l2: #d0d5dd;
+  --dsw-alias-label-primary: #101828;
+  --dsw-alias-label-secondary: #475467;
+  --dsw-alias-label-tertiary: #98a2b3;
+  --dsw-alias-state-accent-primary: #2f6feb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --dsw-alias-bg-base: #0b0e14;
+    --dsw-alias-fill-l1: rgba(255, 255, 255, .02);
+    --dsw-alias-border-l1: #262b36;
+    --dsw-alias-border-l2: #3a4150;
+    --dsw-alias-label-primary: #e6e8eb;
+    --dsw-alias-label-secondary: #9aa4b2;
+    --dsw-alias-label-tertiary: #6b7280;
+    --dsw-alias-state-accent-primary: #4f8ef7;
+  }
+}
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--dsw-alias-bg-base, #0b0e14);
   color: var(--dsw-alias-label-primary, #e6e8eb);
-  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-family: var(--dsw-font-family, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif);
   font-size: 13px;
   line-height: 1.6;
 }
